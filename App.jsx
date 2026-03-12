@@ -128,6 +128,15 @@ function xlsxToJsonSafe(ws) {
     });
 }
 
+// ── Parse numbers that may use European comma decimal separator ───────────────
+function parseNum(v) {
+  if (typeof v === "number") return isNaN(v) ? 0 : v;
+  if (v == null || v === "") return 0;
+  const s = String(v).trim().replace(",", ".");
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+
 // ── Apply levers to 2025 baseline (JS port of apply_levers_v3) ───────────────
 function applyLeversV3(baseline, levers) {
   const FUTURE_YEARS = [2026, 2027, 2028, 2029, 2030];
@@ -222,24 +231,28 @@ function applyLeversV3(baseline, levers) {
     return mult;
   }
 
+  // Pre-build all scenario multipliers
+  const scenarioMults = {};
+  for (const [name, leversSet] of Object.entries(SCENARIOS))
+    scenarioMults[name] = buildMultipliers(leversSet, true);
+
   // 2025 base totals
   let base2025Up = 0, base2025Down = 0;
   for (const row of baseline) {
-    for (const col of UPSTREAM_COLS)   base2025Up   += Number(row[col]) || 0;
-    for (const col of DOWNSTREAM_COLS) base2025Down += Number(row[col]) || 0;
+    for (const col of UPSTREAM_COLS)   base2025Up   += parseNum(row[col]);
+    for (const col of DOWNSTREAM_COLS) base2025Down += parseNum(row[col]);
   }
 
-  // EF scenarios
+  // EF scenarios – grand totals
   const scenarioResults = {};
-  for (const [name, leversSet] of Object.entries(SCENARIOS)) {
-    const mult = buildMultipliers(leversSet, true);
+  for (const [name, mult] of Object.entries(scenarioMults)) {
     scenarioResults[name] = {};
     for (const yr of FUTURE_YEARS) {
       let up = 0, dn = 0;
       for (let i = 0; i < n; i++) {
         const row = baseline[i];
-        for (const col of UPSTREAM_COLS)   up += (Number(row[col]) || 0) * mult[yr][col][i];
-        for (const col of DOWNSTREAM_COLS) dn += (Number(row[col]) || 0) * mult[yr][col][i];
+        for (const col of UPSTREAM_COLS)   up += parseNum(row[col]) * mult[yr][col][i];
+        for (const col of DOWNSTREAM_COLS) dn += parseNum(row[col]) * mult[yr][col][i];
       }
       scenarioResults[name][yr] = { upstream: up, downstream: dn, total: up + dn };
     }
@@ -253,15 +266,45 @@ function applyLeversV3(baseline, levers) {
     for (let i = 0; i < n; i++) {
       const row = baseline[i];
       for (const col of EMISSION_COLS)
-        delta += (Number(row[col]) || 0) * (volMult[yr][col][i] - 1);
+        delta += parseNum(row[col]) * (volMult[yr][col][i] - 1);
     }
     volumeGrowth[yr] = delta;
   }
+
+  // Grouped breakdown by (Ref product line code, Ref countries dest) — like df_grouped2
+  const groupMap = {};
+  for (let i = 0; i < n; i++) {
+    const row = baseline[i];
+    const lc = String(row["Ref product line code"] || "").trim();
+    const cd = String(row["Ref countries dest"]    || "").trim();
+    const key = `${lc}|||${cd}`;
+    if (!groupMap[key]) groupMap[key] = { lineCode: lc, countriesDest: cd, indices: [] };
+    groupMap[key].indices.push(i);
+  }
+  const byGroup = Object.values(groupMap).map(({ lineCode, countriesDest, indices }) => {
+    let overall2025 = 0;
+    for (const i of indices)
+      for (const col of EMISSION_COLS)
+        overall2025 += parseNum(baseline[i][col]);
+    const years = {};
+    for (const yr of FUTURE_YEARS) {
+      years[yr] = {};
+      for (const [sName, mult] of Object.entries(scenarioMults)) {
+        let total = 0;
+        for (const i of indices)
+          for (const col of EMISSION_COLS)
+            total += parseNum(baseline[i][col]) * mult[yr][col][i];
+        years[yr][sName] = total;
+      }
+    }
+    return { lineCode, countriesDest, overall2025, years };
+  });
 
   return {
     base2025: { upstream: base2025Up, downstream: base2025Down, total: base2025Up + base2025Down },
     scenarios: scenarioResults,
     volumeGrowth,
+    byGroup,
     rowCount: n,
     leverCount: levers.length,
   };
@@ -702,6 +745,58 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
               </tbody>
             </table>
           </div>
+
+          {/* Year-by-year grouped breakdown table (df_grouped2) */}
+          {watchResult.byGroup?.length > 0 && (
+            <div style={{ overflowX: "auto", borderRadius: 7, border: "1px solid #8fbe8f", boxShadow: "0 1px 4px #0001", marginBottom: 16 }}>
+              <div style={{ background: C.dark, padding: "6px 10px", fontSize: 11, fontWeight: 700, color: C.white, borderRadius: "7px 7px 0 0" }}>
+                2030 Trajectory — by Product Line &amp; Country (kt CO₂e)
+              </div>
+              <table style={{ borderCollapse: "collapse", fontSize: 10, width: "100%" }}>
+                <thead>
+                  <tr style={{ background: "#2d5a3d" }}>
+                    <th style={{ ...thS("left"), position: "sticky", left: 0, background: "#2d5a3d", zIndex: 1 }}>Line</th>
+                    <th style={thS("left")}>Country</th>
+                    <th style={thS("right")}>2025</th>
+                    {WATCH_YEARS.map((yr) => (
+                      <th key={yr} colSpan={Object.keys(WATCH_SCENARIOS).length} style={{ ...thS("center"), borderLeft: "2px solid #4a8a5a" }}>{yr}</th>
+                    ))}
+                  </tr>
+                  <tr style={{ background: "#3a6a4a" }}>
+                    <th style={{ ...thS("left"), position: "sticky", left: 0, background: "#3a6a4a", zIndex: 1 }} />
+                    <th style={thS("left")} />
+                    <th style={thS("right")} />
+                    {WATCH_YEARS.map((yr) => (
+                      Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => (
+                        <th key={`${yr}-${key}`} style={{ ...thS("right"), color, borderLeft: key === "baseline" ? "2px solid #4a8a5a" : undefined }}>
+                          {label}
+                        </th>
+                      ))
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {watchResult.byGroup.map(({ lineCode, countriesDest, overall2025, years }, ri) => (
+                    <tr key={ri} style={{ background: ri % 2 === 0 ? C.white : C.off }}>
+                      <td style={{ ...tdS("left", true), position: "sticky", left: 0, background: ri % 2 === 0 ? C.white : C.off, zIndex: 1 }}>{lineCode || "—"}</td>
+                      <td style={tdS("left")}>{countriesDest || "—"}</td>
+                      <td style={tdS("right", true)}>{fmtKt(overall2025)}</td>
+                      {WATCH_YEARS.map((yr) => (
+                        Object.keys(WATCH_SCENARIOS).map((sKey, si) => {
+                          const val = years[yr]?.[sKey];
+                          return (
+                            <td key={`${yr}-${sKey}`} style={{ ...tdS("right", false), borderLeft: si === 0 ? "2px solid #e0ece0" : undefined }}>
+                              {fmtKt(val)}
+                            </td>
+                          );
+                        })
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Bar chart */}
           <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14 }}>
