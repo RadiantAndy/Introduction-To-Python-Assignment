@@ -1065,95 +1065,19 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
 }
 
 function TrajectorySummary({ data, loading, error }) {
-  const [growthRate, setGrowthRate] = React.useState(4);
-
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: C.grey, fontSize: 13 }}>Loading 2025 data…</div>;
   if (error) return <div style={{ padding: 40, color: C.rHigh, fontSize: 13 }}>Error loading df_2025.xlsx: {error}</div>;
   if (!data?.length) return <div style={{ padding: 40, color: C.grey, fontSize: 13 }}>No data found in df_2025.xlsx</div>;
-
-  const mult = 1 + growthRate / 100;
-  const totalBase = data.reduce((s, r) => s + (parseNum(r["Overall emissions (kgco2e)"]) || 0), 0);
-  const totalWithGrowth = totalBase * mult;
-
-  const GROWTH_COL = "With growth (kgco2e)";
-  const displayCols = [...TRAJ_COLS, GROWTH_COL];
-
   return (
     <div style={{ padding: "14px 16px", overflowY: "auto", height: "100%" }}>
-
-      {/* ── Growth rate control ── */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
-        background: C.white, border: "1px solid #cdd8d0", borderRadius: 8,
-        padding: "10px 14px", marginBottom: 12,
-      }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.dark, whiteSpace: "nowrap" }}>
-          Volume Growth Rate
-        </div>
-        <input
-          type="range" min={0} max={20} step={0.5} value={growthRate}
-          onChange={(e) => setGrowthRate(parseFloat(e.target.value))}
-          style={{ flex: "1 1 180px", accentColor: C.mid, cursor: "pointer" }}
-        />
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <input
-            type="number" min={0} max={20} step={0.5} value={growthRate}
-            onChange={(e) => setGrowthRate(Math.min(20, Math.max(0, parseFloat(e.target.value) || 0)))}
-            style={{
-              width: 54, padding: "3px 6px", fontSize: 13, fontWeight: 700,
-              border: "1px solid #cdd8d0", borderRadius: 5, textAlign: "right",
-              color: C.mid,
-            }}
-          />
-          <span style={{ fontSize: 13, fontWeight: 700, color: C.mid }}>%</span>
-        </div>
-        <div style={{ fontSize: 11, color: C.grey, whiteSpace: "nowrap" }}>
-          multiplier&nbsp;<strong style={{ color: C.dark }}>×{mult.toFixed(4)}</strong>
-        </div>
-
-        {/* Summary chips */}
-        <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
-          <div style={{
-            background: "#e8f0e8", borderRadius: 6, padding: "4px 10px", fontSize: 11,
-          }}>
-            Baseline total&nbsp;
-            <strong style={{ color: C.dark }}>{fmtKt(totalBase)} kt</strong>
-          </div>
-          <div style={{
-            background: "#fff3e0", borderRadius: 6, padding: "4px 10px", fontSize: 11,
-          }}>
-            With {growthRate}% growth&nbsp;
-            <strong style={{ color: "#e65100" }}>{fmtKt(totalWithGrowth)} kt</strong>
-          </div>
-          <div style={{
-            background: "#fce4e4", borderRadius: 6, padding: "4px 10px", fontSize: 11,
-          }}>
-            Delta&nbsp;
-            <strong style={{ color: C.rHigh }}>+{fmtKt(totalWithGrowth - totalBase)} kt</strong>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ marginBottom: 8, fontSize: 12, color: C.grey }}>{data.length} rows · 2025 baseline emissions data</div>
+      <div style={{ marginBottom: 10, fontSize: 12, color: C.grey }}>{data.length} rows · 2025 baseline emissions data</div>
       <div style={{ overflowX: "auto", borderRadius: 7, border: "1px solid #8fbe8f", boxShadow: "0 1px 4px #0001" }}>
         <table style={{ borderCollapse: "collapse", fontSize: 11, width: "100%" }}>
           <thead>
             <tr style={{ background: C.dark }}>
-              {displayCols.map((h) => (
-                <th
-                  key={h}
-                  style={{
-                    padding: "6px 8px",
-                    color: h === GROWTH_COL ? "#ffe082" : C.white,
-                    fontWeight: 700,
-                    whiteSpace: "nowrap",
-                    textAlign: TRAJ_NUM_COLS.has(h) || h === GROWTH_COL ? "right" : "left",
-                    borderRight: "1px solid #2d5a3d",
-                    fontSize: 10,
-                    background: h === GROWTH_COL ? "#b45309" : undefined,
-                  }}
-                >
-                  {h === GROWTH_COL ? `With ${growthRate}% growth (kgco2e)` : h}
+              {TRAJ_COLS.map((h) => (
+                <th key={h} style={{ padding: "6px 8px", color: C.white, fontWeight: 700, whiteSpace: "nowrap", textAlign: TRAJ_NUM_COLS.has(h) ? "right" : "left", borderRight: "1px solid #2d5a3d", fontSize: 10 }}>
+                  {h}
                 </th>
               ))}
             </tr>
@@ -1161,38 +1085,14 @@ function TrajectorySummary({ data, loading, error }) {
           <tbody>
             {data.map((row, i) => (
               <tr key={i} style={{ background: i % 2 === 0 ? C.white : C.off }}>
-                {displayCols.map((h) => {
-                  let v, display;
-                  if (h === GROWTH_COL) {
-                    const base = parseNum(row["Overall emissions (kgco2e)"]);
-                    v = base * mult;
-                    display = v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                  } else {
-                    v = row[h] ?? "";
-                    const isNum = TRAJ_NUM_COLS.has(h);
-                    display = isNum && typeof v === "number"
-                      ? h === "year" || h === "scalar quantity"
-                        ? v.toLocaleString()
-                        : v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                      : String(v);
-                  }
-                  const isGrowthCol = h === GROWTH_COL;
-                  const isOverall   = h === "Overall emissions (kgco2e)";
-                  const isNum = TRAJ_NUM_COLS.has(h) || isGrowthCol;
+                {TRAJ_COLS.map((h) => {
+                  const v = row[h] ?? "";
+                  const isNum = TRAJ_NUM_COLS.has(h);
+                  const display = isNum && typeof v === "number"
+                    ? h === "year" || h === "scalar quantity" ? v.toLocaleString() : v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    : String(v);
                   return (
-                    <td
-                      key={h}
-                      style={{
-                        padding: "4px 8px",
-                        borderBottom: "1px solid #e0ece0",
-                        borderRight: "1px solid #f0f4f0",
-                        whiteSpace: "nowrap",
-                        textAlign: isNum ? "right" : "left",
-                        fontWeight: isOverall || isGrowthCol ? 700 : 400,
-                        color: isGrowthCol ? "#b45309" : isOverall ? C.mid : C.text,
-                        background: isGrowthCol ? "#fff8ee" : undefined,
-                      }}
-                    >
+                    <td key={h} style={{ padding: "4px 8px", borderBottom: "1px solid #e0ece0", borderRight: "1px solid #f0f4f0", whiteSpace: "nowrap", textAlign: isNum ? "right" : "left", fontWeight: h === "Overall emissions (kgco2e)" ? 700 : 400, color: h === "Overall emissions (kgco2e)" ? C.mid : C.text }}>
                       {display}
                     </td>
                   );
@@ -1579,6 +1479,14 @@ export default function App() {
     }
   }
 
+  // ── Add generated levers to Watch tab in memory ──────────────────────────
+  const [leversAddedCount, setLeversAddedCount] = React.useState(0);
+  function addLeversToWatch() {
+    if (!allLtRows.length) return;
+    setLeversData((prev) => [...(prev || []), ...allLtRows]);
+    setLeversAddedCount((n) => n + allLtRows.length);
+  }
+
   const EXAMPLES = [
     `Product: ATV750, product line IDVSD, LoB IC&D.\nComment: Variable Speed Drive (FAKE data). Lifecycle: new range under development, commercialised in 2028.\nMigration rate 60%, growth 6–7%.\nDesign with Less: 10%, "New range will be 10% lighter", committed.\nMat efficiency legacy: 10%, "mainly plastic, aluminum & Steel", committed.\nMat efficiency new offer: 20%, "New range will include 100% of responsible plastic & Steel", committed.\nLifetime extension: 5%, high risk.\nEE1: 10%, "10% more efficient with new electronic design", committed.\nEE2: 20%, "extra 20% efficiency with new SiC components", high risk.`,
     `Family EcoVSD, line L5, LoB IC&D. Migration 70%, growth 5–7%.\nDesign with Less: 12%, committed.\nMat eff legacy: 8%, low risk.\nMat eff new offer: 18%, medium risk.\nEE1 Hub1+Hub2: 25%, committed.\nEE2 Hub1 only: 10%, high risk.`,
@@ -1835,6 +1743,16 @@ export default function App() {
                   {viewTab === "levers_tab" && (
                     <button onClick={downloadLeversTab} style={{ background: "#e8f0e8", border: "none", borderRadius: 6, padding: "6px 10px", fontWeight: 700, fontSize: 11, cursor: "pointer", color: C.text }}>
                       ↓ Download Levers Tab
+                    </button>
+                  )}
+                  {viewTab === "levers_tab" && allLtRows.length > 0 && (
+                    <button
+                      onClick={addLeversToWatch}
+                      title="Append these levers to the active levers file and recompute scenarios"
+                      style={{ background: C.mid, border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", color: C.white, display: "inline-flex", alignItems: "center", gap: 5 }}
+                    >
+                      ➕ Add Levers
+                      {leversAddedCount > 0 && <span style={{ fontSize: 9, opacity: 0.8 }}>({leversAddedCount} added)</span>}
                     </button>
                   )}
                   <div style={{ fontSize: 11, color: C.grey }}>{library.length} product famil{library.length === 1 ? "y" : "ies"}</div>
