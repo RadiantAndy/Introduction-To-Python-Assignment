@@ -769,7 +769,50 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
 
       {watchResult && (
         <>
-          {/* Summary cards */}
+          {/* ── Charts (top) ─────────────────────────────────────────────── */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 12, marginBottom: 16 }}>
+            {/* Line chart */}
+            <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
+                Emissions Trajectory 2025–2030 (kt CO₂e)
+              </div>
+              <TrajectoryLineChart watchResult={watchResult} />
+            </div>
+
+            {/* Bar chart */}
+            <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
+                2030 Scenario Comparison
+              </div>
+              {(() => {
+                const maxVal = watchResult.base2025.total * 1.05;
+                const baseW  = Math.min(100, (watchResult.base2025.total / maxVal) * 100);
+                return Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
+                  const total = watchResult.scenarios[key]?.[2030]?.total ?? 0;
+                  const barW  = Math.min(100, Math.max(0, (total / maxVal) * 100));
+                  return (
+                    <div key={key} style={{ marginBottom: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ width: 90, fontSize: 11, fontWeight: 700, color, flexShrink: 0 }}>{label}</div>
+                        <div style={{ flex: 1, background: "#e8f0e8", borderRadius: 4, height: 18, position: "relative" }}>
+                          <div style={{ width: `${barW}%`, height: "100%", background: color, borderRadius: 4, opacity: 0.85 }} />
+                          <div style={{ position: "absolute", left: `${baseW}%`, top: 0, bottom: 0, width: 2, background: C.grey }} title="2025 baseline" />
+                        </div>
+                        <div style={{ width: 70, textAlign: "right", fontSize: 11, fontWeight: 600 }}>
+                          {fmtKt(total)} kt
+                        </div>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+              <div style={{ fontSize: 10, color: C.grey, marginTop: 6 }}>
+                Grey line = 2025 baseline ({fmtKt(watchResult.base2025.total)} kt CO₂e)
+              </div>
+            </div>
+          </div>
+
+          {/* ── Summary cards ────────────────────────────────────────────── */}
           <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
             <WatchCard
               label="2025 baseline (kt CO₂e)"
@@ -792,7 +835,7 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
             })}
           </div>
 
-          {/* Scenario table */}
+          {/* ── Scenario table ───────────────────────────────────────────── */}
           <div style={{ overflowX: "auto", borderRadius: 7, border: "1px solid #8fbe8f", boxShadow: "0 1px 4px #0001", marginBottom: 16 }}>
             <table style={{ borderCollapse: "collapse", fontSize: 11, width: "100%" }}>
               <thead>
@@ -832,15 +875,12 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                     })}
                   </tr>
                 ))}
-                {/* Volume growth row */}
                 <tr style={{ background: "#e8f0e8", borderTop: "2px solid #8fbe8f" }}>
                   <td style={{ ...tdS("left", false, C.grey), fontStyle: "italic" }}>Volume growth (net)</td>
                   <td style={tdS("right")}>—</td>
                   {WATCH_YEARS.map((yr) => (
                     <React.Fragment key={yr}>
-                      <td style={{ ...tdS("right", false, C.grey), fontStyle: "italic" }}>
-                        {fmtKt(watchResult.volumeGrowth[yr])}
-                      </td>
+                      <td style={{ ...tdS("right", false, C.grey), fontStyle: "italic" }}>{fmtKt(watchResult.volumeGrowth[yr])}</td>
                       <td style={tdS("right")}>—</td>
                     </React.Fragment>
                   ))}
@@ -849,99 +889,98 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
             </table>
           </div>
 
-          {/* Year-by-year grouped breakdown table (df_grouped2) */}
-          {watchResult.byGroup?.length > 0 && (
-            <div style={{ overflowX: "auto", borderRadius: 7, border: "1px solid #8fbe8f", boxShadow: "0 1px 4px #0001", marginBottom: 16 }}>
-              <div style={{ background: C.dark, padding: "6px 10px", fontSize: 11, fontWeight: 700, color: C.white, borderRadius: "7px 7px 0 0" }}>
-                2030 Trajectory — by Product Line &amp; Country (kt CO₂e)
-              </div>
-              <table style={{ borderCollapse: "collapse", fontSize: 10, width: "100%" }}>
-                <thead>
-                  <tr style={{ background: "#2d5a3d" }}>
-                    <th style={{ ...thS("left"), position: "sticky", left: 0, background: "#2d5a3d", zIndex: 1 }}>Line</th>
-                    <th style={thS("left")}>Country</th>
-                    <th style={thS("right")}>2025</th>
-                    {WATCH_YEARS.map((yr) => (
-                      <th key={yr} colSpan={Object.keys(WATCH_SCENARIOS).length} style={{ ...thS("center"), borderLeft: "2px solid #4a8a5a" }}>{yr}</th>
-                    ))}
-                  </tr>
-                  <tr style={{ background: "#3a6a4a" }}>
-                    <th style={{ ...thS("left"), position: "sticky", left: 0, background: "#3a6a4a", zIndex: 1 }} />
-                    <th style={thS("left")} />
-                    <th style={thS("right")} />
-                    {WATCH_YEARS.map((yr) => (
-                      Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => (
-                        <th key={`${yr}-${key}`} style={{ ...thS("right"), color, borderLeft: key === "baseline" ? "2px solid #4a8a5a" : undefined }}>
-                          {label}
-                        </th>
-                      ))
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {watchResult.byGroup.map(({ lineCode, countriesDest, overall2025, years }, ri) => (
-                    <tr key={ri} style={{ background: ri % 2 === 0 ? C.white : C.off }}>
-                      <td style={{ ...tdS("left", true), position: "sticky", left: 0, background: ri % 2 === 0 ? C.white : C.off, zIndex: 1 }}>{lineCode || "—"}</td>
-                      <td style={tdS("left")}>{countriesDest || "—"}</td>
-                      <td style={tdS("right", true)}>{fmtKt(overall2025)}</td>
-                      {WATCH_YEARS.map((yr) => (
-                        Object.keys(WATCH_SCENARIOS).map((sKey, si) => {
-                          const val = years[yr]?.[sKey];
-                          return (
-                            <td key={`${yr}-${sKey}`} style={{ ...tdS("right", false), borderLeft: si === 0 ? "2px solid #e0ece0" : undefined }}>
-                              {fmtKt(val)}
-                            </td>
-                          );
-                        })
+          {/* ── Breakdown table (df_grouped2) — first 10 rows + download ── */}
+          {watchResult.byGroup?.length > 0 && (() => {
+            const allRows = watchResult.byGroup;
+            const preview = allRows.slice(0, 10);
+
+            function downloadCsv() {
+              const scenarioKeys = Object.keys(WATCH_SCENARIOS);
+              const header = [
+                "Product Line Code", "Countries Dest", "Overall 2025 (kgco2e)",
+                ...WATCH_YEARS.flatMap((yr) =>
+                  scenarioKeys.map((s) => `Overall ${yr} ${s} (kgco2e)`)
+                ),
+              ];
+              const csvRows = allRows.map(({ lineCode, countriesDest, overall2025, years }) => [
+                lineCode, countriesDest, overall2025.toFixed(2),
+                ...WATCH_YEARS.flatMap((yr) =>
+                  scenarioKeys.map((s) => (years[yr]?.[s] ?? 0).toFixed(2))
+                ),
+              ]);
+              const csv = [header, ...csvRows].map((r) => r.join(",")).join("\n");
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+              a.download = "trajectory_by_line_country.csv";
+              a.click();
+            }
+
+            return (
+              <div style={{ marginBottom: 16 }}>
+                {/* Header row with download button */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                  background: C.dark, padding: "6px 10px", borderRadius: "7px 7px 0 0" }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: C.white }}>
+                    2030 Trajectory — by Product Line &amp; Country (kt CO₂e)
+                    <span style={{ fontWeight: 400, opacity: 0.7, marginLeft: 8 }}>
+                      showing 10 of {allRows.length} rows
+                    </span>
+                  </span>
+                  <button onClick={downloadCsv} style={{
+                    background: C.bright, color: C.dark, border: "none", borderRadius: 5,
+                    padding: "4px 10px", fontWeight: 700, fontSize: 11, cursor: "pointer",
+                  }}>
+                    ⬇ Download full table (.csv)
+                  </button>
+                </div>
+                <div style={{ overflowX: "auto", border: "1px solid #8fbe8f", borderTop: "none", borderRadius: "0 0 7px 7px", boxShadow: "0 1px 4px #0001" }}>
+                  <table style={{ borderCollapse: "collapse", fontSize: 10, width: "100%" }}>
+                    <thead>
+                      <tr style={{ background: "#2d5a3d" }}>
+                        <th style={{ ...thS("left"), position: "sticky", left: 0, background: "#2d5a3d", zIndex: 1 }}>Line</th>
+                        <th style={thS("left")}>Country</th>
+                        <th style={thS("right")}>2025</th>
+                        {WATCH_YEARS.map((yr) => (
+                          <th key={yr} colSpan={Object.keys(WATCH_SCENARIOS).length}
+                            style={{ ...thS("center"), borderLeft: "2px solid #4a8a5a" }}>{yr}</th>
+                        ))}
+                      </tr>
+                      <tr style={{ background: "#3a6a4a" }}>
+                        <th style={{ ...thS("left"), position: "sticky", left: 0, background: "#3a6a4a", zIndex: 1 }} />
+                        <th style={thS("left")} />
+                        <th style={thS("right")} />
+                        {WATCH_YEARS.map((yr) =>
+                          Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => (
+                            <th key={`${yr}-${key}`} style={{ ...thS("right"), color, borderLeft: key === "baseline" ? "2px solid #4a8a5a" : undefined }}>
+                              {label}
+                            </th>
+                          ))
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.map(({ lineCode, countriesDest, overall2025, years }, ri) => (
+                        <tr key={ri} style={{ background: ri % 2 === 0 ? C.white : C.off }}>
+                          <td style={{ ...tdS("left", true), position: "sticky", left: 0, background: ri % 2 === 0 ? C.white : C.off, zIndex: 1 }}>{lineCode || "—"}</td>
+                          <td style={tdS("left")}>{countriesDest || "—"}</td>
+                          <td style={tdS("right", true)}>{fmtKt(overall2025)}</td>
+                          {WATCH_YEARS.map((yr) =>
+                            Object.keys(WATCH_SCENARIOS).map((sKey, si) => (
+                              <td key={`${yr}-${sKey}`} style={{ ...tdS("right", false), borderLeft: si === 0 ? "2px solid #e0ece0" : undefined }}>
+                                {fmtKt(years[yr]?.[sKey])}
+                              </td>
+                            ))
+                          )}
+                        </tr>
                       ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
 
-          {/* Line chart */}
-          <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14, marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
-              Emissions Trajectory 2025–2030 (kt CO₂e)
-            </div>
-            <TrajectoryLineChart watchResult={watchResult} />
-          </div>
-
-          {/* Bar chart */}
-          <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14, marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
-              2030 Scenario Comparison
-            </div>
-            {(() => {
-              const maxVal = watchResult.base2025.total * 1.05;
-              const baseW  = Math.min(100, (watchResult.base2025.total / maxVal) * 100);
-              return Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
-                const total = watchResult.scenarios[key]?.[2030]?.total ?? 0;
-                const barW  = Math.min(100, Math.max(0, (total / maxVal) * 100));
-                return (
-                  <div key={key} style={{ marginBottom: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <div style={{ width: 110, fontSize: 11, fontWeight: 700, color, flexShrink: 0 }}>{label}</div>
-                      <div style={{ flex: 1, background: "#e8f0e8", borderRadius: 4, height: 20, position: "relative" }}>
-                        <div style={{ width: `${barW}%`, height: "100%", background: color, borderRadius: 4, opacity: 0.85 }} />
-                        <div style={{ position: "absolute", left: `${baseW}%`, top: 0, bottom: 0, width: 2, background: C.grey }} title="2025 baseline" />
-                      </div>
-                      <div style={{ width: 90, textAlign: "right", fontSize: 11, fontWeight: 600 }}>
-                        {fmtKt(watchResult.scenarios[key]?.[2030]?.total)} kt
-                      </div>
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-            <div style={{ fontSize: 10, color: C.grey, marginTop: 6 }}>
-              Grey line = 2025 baseline ({fmtKt(watchResult.base2025.total)} kt CO₂e) · Bars show 2030 totals
-            </div>
-          </div>
-
-          {/* Debug panel */}
+          {/* ── Debug panel ──────────────────────────────────────────────── */}
           <details style={{ background: "#fffde7", border: "1px solid #f9a825", borderRadius: 7, padding: "8px 12px", fontSize: 11 }}>
             <summary style={{ fontWeight: 700, color: "#e65100", cursor: "pointer", marginBottom: 6 }}>
               🐛 Debug — raw df_2025 first row &amp; byGroup
