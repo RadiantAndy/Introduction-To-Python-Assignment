@@ -145,14 +145,12 @@ function applyLeversV3(baseline, levers) {
 
   // Drop levers whose Type of growth/degrowth contains "growth"
   const TYPE_COL = "Type of growth/degrowth";
-  const filtered = levers.filter(
-    (l) => !String(l[TYPE_COL] || "").trim().toLowerCase().includes("growth")
-  );
-
-  // Separate EF vs Volume levers
+  // Separate EF vs Volume levers (mirrors Python logic — no growth-type pre-filter;
+  // "Percentual direct (de)growth" and "Compound growth" both contain "growth" so
+  // the old filter incorrectly removed every lever)
   const ATTR_COL = "Attribute impacted (EF or Volume)";
-  const leversEF  = filtered.filter((l) => String(l[ATTR_COL] || "").trim() !== "Volume");
-  const leversVol = filtered.filter((l) => String(l[ATTR_COL] || "").trim() === "Volume");
+  const leversEF  = levers.filter((l) => String(l[ATTR_COL] || "").trim() !== "Volume");
+  const leversVol = levers.filter((l) => String(l[ATTR_COL] || "").trim() === "Volume");
 
   // Risk/Confidence status.1 = second occurrence (pandas naming convention)
   const RISK_COL = "Risk/Confidence status.1";
