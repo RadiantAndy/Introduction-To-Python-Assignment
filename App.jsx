@@ -561,8 +561,23 @@ function isLikelyLeversInputHeaders(headers) {
 }
 
 // ── AI ───────────────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are a Schneider Electric sustainability analyst specialising in industrial automation carbon footprint modelling.
-Extract lever assumptions from the user's description. Return ONLY valid JSON — no markdown, no preamble.
+function buildSystemPrompt(lines, families, countries) {
+  const lineList    = lines.length    ? lines.join(", ")    : "(loading…)";
+  const countryList = countries.length ? countries.join(", ") : "(loading…)";
+  // Build compact family map: "L1:[V1,V2] L2:[V3]…"
+  const famSummary = lines.map((l) => `${l}:[${(families[l] || []).join(",")}]`).join(" ");
+  return `You are a Schneider Electric sustainability analyst specialising in industrial automation carbon footprint modelling.
+
+REQUIRED INFORMATION — before generating JSON you MUST have all of the following from the user:
+1. product_line_code — must be one of the valid codes: ${lineList}
+2. migration_rate — fraction 0–1 (e.g. 0.6 = 60% migration to new offer by 2030)
+3. At least one lever annual_rate — negative fraction (e.g. -0.10 = 10% reduction)
+4. country — destination country code, must be one of: ${countryList}
+5. product_family (optional) — valid families per line: ${famSummary}
+
+If ANY of items 1–4 are missing, respond in plain conversational text asking for the missing items. Do NOT output JSON until you have all required information.
+
+Once you have all required info, extract lever assumptions and return ONLY valid JSON — no markdown, no preamble.
 Schema:
 {
   "lob": string, "product_line_code": string, "product_family": string,
@@ -585,7 +600,7 @@ Schema:
     }
   },
   "levers_tab": [
-    {"lever_type":string,"entries":[{"hub":string,"country":string|null,"migration_rate":number,"annual_rate":number,"risk":string,"hypothesis":string}]}
+    {"lever_type":string,"entries":[{"hub":string,"country":string,"migration_rate":number,"annual_rate":number,"risk":string,"hypothesis":string}]}
   ]
 }
 Rules:
@@ -597,8 +612,9 @@ Rules:
 - lever_type values: "design_with_less"|"mat_eff_legacy"|"mat_eff_new_offer"|"lifetime_extension"|"circular_offers"|"other"|"energy_efficiency_1"|"energy_efficiency_2"|"energy_efficiency_3"
 - Default hub="Hub1"; if Hub1≠Hub2 create two entries; migration_rate per entry defaults to levers_input.migration_rate
 - year=2025, starting_year=2026, completion_year=2030`;
+}
 
-async function callClaude(msg, history) {
+async function callClaude(msg, history, systemPrompt) {
   const messages = [...history, { role: "user", content: msg }];
   const res = await fetch("/hf-api/v1/chat/completions", {
     method: "POST",
@@ -606,7 +622,7 @@ async function callClaude(msg, history) {
     body: JSON.stringify({
       model: "MiniMaxAI/MiniMax-M2.5",
       max_tokens: 2500,
-      messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
+      messages: [{ role: "system", content: systemPrompt }, ...messages],
     }),
   });
   const data = await res.json();
@@ -1451,10 +1467,9 @@ export default function App() {
   const [library, setLibrary] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [viewTab, setViewTab] = useState("levers_input");
-  const [baselineLines, setBaselineLines] = useState([]);          // ["L1","L2",…]
+  const [baselineLines, setBaselineLines] = useState([]);      // ["L1","L2",…] for system prompt
+  const [baselineCountries, setBaselineCountries] = useState([]); // ["1","10","101",…]
   const [baselineFamiliesByLine, setBaselineFamiliesByLine] = useState({}); // {L5:["V362",…]}
-  const [targetLine, setTargetLine] = useState("");
-  const [targetFamily, setTargetFamily] = useState("");
   const endRef = useRef(null);
 
   // ── Load df_2025.xlsx from public/ on mount ──────────────────────────────
@@ -1474,19 +1489,24 @@ export default function App() {
         const aggregated = aggregateBaseline(rows);
         console.log(`df_2025: ${rows.length} rows → ${aggregated.length} aggregated groups`);
         setTrajData(aggregated);
-        // Build product-line → families lookup for the target dropdowns
+        // Build product-line → families lookup and unique countries for the system prompt
         const famMap = {};
+        const countriesSet = new Set();
         for (const row of aggregated) {
-          const line = String(row["Ref product line code"] ?? "").trim();
-          const fam  = String(row["Ref product family"]    ?? "").trim();
-          if (!line) continue;
-          if (!famMap[line]) famMap[line] = new Set();
-          if (fam) famMap[line].add(fam);
+          const line    = String(row["Ref product line code"] ?? "").trim();
+          const fam     = String(row["Ref product family"]    ?? "").trim();
+          const country = String(row["Ref countries dest"]    ?? "").trim();
+          if (line) {
+            if (!famMap[line]) famMap[line] = new Set();
+            if (fam) famMap[line].add(fam);
+          }
+          if (country) countriesSet.add(country);
         }
         setBaselineLines(Object.keys(famMap).sort());
         setBaselineFamiliesByLine(Object.fromEntries(
           Object.entries(famMap).map(([k, v]) => [k, [...v].sort()])
         ));
+        setBaselineCountries([...countriesSet].sort());
       })
       .catch((e) => setTrajError(e.message))
       .finally(() => setTrajLoading(false));
@@ -1539,26 +1559,37 @@ export default function App() {
     const log = [...chatLog, { role: "user", text: msg }];
     setChatLog(log);
     try {
-      const { text: aiText, messages: hist } = await callClaude(msg, history);
-      try {
-        const parsed = tryJSON(aiText);
-        const liRow = buildLeversInputRow(parsed);
-        const ltRows = buildLeversTabRows(parsed);
-        const entry = {
-          id: `ai_${Date.now()}`,
-          product_family: parsed.product_family || "Unknown",
-          product_line: parsed.product_line_code || "",
-          liRow, ltRows, _spec: parsed,
-        };
-        setLibrary((prev) => [...prev, entry]);
-        setActiveId(entry.id);
-        setHistory(hist.concat([{ role: "assistant", content: aiText }]));
-        setChatLog([
-          ...log,
-          { role: "assistant", ok: true, text: `✨ Added "${parsed.product_family}" — ${ltRows.length} Levers tab row${ltRows.length !== 1 ? "s" : ""}. Now in library.` },
-        ]);
-      } catch {
-        setHistory(hist.concat([{ role: "assistant", content: aiText }]));
+      const sysPrompt = buildSystemPrompt(baselineLines, baselineFamiliesByLine, baselineCountries);
+      const { text: aiText, messages: hist } = await callClaude(msg, history, sysPrompt);
+      setHistory(hist.concat([{ role: "assistant", content: aiText }]));
+      let parsed = null;
+      try { parsed = tryJSON(aiText); } catch { /* plain text response — ask for more info */ }
+
+      if (parsed) {
+        // Validate required fields before building rows
+        const missing = [];
+        if (!parsed.product_line_code) missing.push("product line code");
+        if (!(parsed.levers_input?.migration_rate > 0)) missing.push("migration rate");
+        const hasRate = (parsed.levers_tab || []).some((lt) =>
+          (lt.entries || []).some((e) => typeof e.annual_rate === "number" && e.annual_rate !== 0)
+        );
+        if (!hasRate) missing.push("at least one annual improvement rate");
+        const hasCountry = (parsed.levers_tab || []).every((lt) =>
+          (lt.entries || []).every((e) => e.country)
+        );
+        if (!hasCountry) missing.push("country code for each lever entry");
+
+        if (missing.length > 0) {
+          setChatLog([...log, { role: "assistant", text: `To generate levers I still need: ${missing.join(", ")}. Could you provide those?` }]);
+        } else {
+          const liRow  = buildLeversInputRow(parsed);
+          const ltRows = buildLeversTabRows(parsed);
+          const entry  = { id: `ai_${Date.now()}`, product_family: parsed.product_family || "Unknown", product_line: parsed.product_line_code || "", liRow, ltRows, _spec: parsed };
+          setLibrary((prev) => [...prev, entry]);
+          setActiveId(entry.id);
+          setChatLog([...log, { role: "assistant", ok: true, text: `✨ Added "${parsed.product_family}" (${parsed.product_line_code}) — ${ltRows.length} lever rows. Switch to Levers tab → Add Levers to apply.` }]);
+        }
+      } else {
         setChatLog([...log, { role: "assistant", text: aiText }]);
       }
     } catch (e) {
@@ -1636,14 +1667,8 @@ export default function App() {
 
   // ── Manage generated levers in Watch tab ─────────────────────────────────
   function addLeversToWatch() {
-    if (!allLtRows.length || !targetLine) return;
-    // Override the AI-generated product codes with the user's actual baseline selection
-    const rows = allLtRows.map((r) => ({
-      ...r,
-      "product line code": targetLine,
-      "product family":    targetFamily || "",
-    }));
-    setAddedLeversRows((prev) => [...prev, ...rows]);
+    if (!allLtRows.length) return;
+    setAddedLeversRows((prev) => [...prev, ...allLtRows]);
   }
   function removeAddedLevers() {
     setAddedLeversRows([]);
@@ -1756,8 +1781,15 @@ export default function App() {
             {/* Library panel */}
             {library.length > 0 && (
               <div style={{ flexShrink: 0, borderBottom: "1px solid #e0ece0", background: "#f8fdf8" }}>
-                <div style={{ padding: "8px 12px 6px" }}>
+                <div style={{ padding: "8px 12px 6px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: C.text }}>Library ({library.length})</span>
+                  <button
+                    onClick={() => { setLibrary([]); setActiveId(null); setChatLog([]); setHistory([]); setAddedLeversRows([]); setError(null); }}
+                    title="Clear everything and start over"
+                    style={{ background: "none", border: `1px solid ${C.grey}55`, borderRadius: 5, padding: "2px 8px", fontSize: 10, color: C.grey, cursor: "pointer", fontWeight: 600 }}
+                  >
+                    Start over
+                  </button>
                 </div>
                 <div style={{ maxHeight: 160, overflowY: "auto", padding: "0 8px 8px" }}>
                   {library.map((e) => (
@@ -1820,7 +1852,14 @@ export default function App() {
                 </div>
               )}
               {chatLog.map((m, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", gap: 4, alignItems: "flex-start" }}>
+                  {m.role === "user" && (
+                    <button
+                      onClick={() => { setChatLog((prev) => prev.filter((_, j) => j !== i)); setHistory((prev) => prev.filter((_, j) => j !== i)); }}
+                      title="Remove this message"
+                      style={{ background: "none", border: "none", cursor: "pointer", color: C.grey, fontSize: 12, padding: "4px 2px", lineHeight: 1, flexShrink: 0 }}
+                    >×</button>
+                  )}
                   <div
                     style={{
                       maxWidth: "90%",
@@ -1915,37 +1954,16 @@ export default function App() {
                       ↓ Download Levers Tab
                     </button>
                   )}
-                  {viewTab === "levers_tab" && allLtRows.length > 0 && (<>
-                    {/* Product-line / family selectors — map AI output to real baseline codes */}
-                    <select
-                      value={targetLine}
-                      onChange={e => { setTargetLine(e.target.value); setTargetFamily(""); }}
-                      title="Map to a real product line from the baseline"
-                      style={{ fontSize: 11, padding: "4px 6px", borderRadius: 6, border: "1px solid #cdd8d0", color: targetLine ? C.text : C.grey, fontWeight: targetLine ? 700 : 400 }}
-                    >
-                      <option value="">— select product line —</option>
-                      {baselineLines.map(l => <option key={l} value={l}>{l}</option>)}
-                    </select>
-                    <select
-                      value={targetFamily}
-                      onChange={e => setTargetFamily(e.target.value)}
-                      disabled={!targetLine}
-                      title="Optionally restrict to one family within the product line"
-                      style={{ fontSize: 11, padding: "4px 6px", borderRadius: 6, border: "1px solid #cdd8d0", color: targetFamily ? C.text : C.grey, fontWeight: targetFamily ? 700 : 400 }}
-                    >
-                      <option value="">— all families —</option>
-                      {(baselineFamiliesByLine[targetLine] || []).map(f => <option key={f} value={f}>{f}</option>)}
-                    </select>
+                  {viewTab === "levers_tab" && allLtRows.length > 0 && (
                     <button
                       onClick={addLeversToWatch}
-                      disabled={!targetLine}
-                      title={targetLine ? "Append these levers to the active levers file and recompute scenarios" : "Select a product line first"}
-                      style={{ background: targetLine ? C.mid : "#ccc", border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: targetLine ? "pointer" : "not-allowed", color: C.white, display: "inline-flex", alignItems: "center", gap: 5 }}
+                      title="Append these levers to the active levers file and recompute scenarios"
+                      style={{ background: C.mid, border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", color: C.white, display: "inline-flex", alignItems: "center", gap: 5 }}
                     >
                       ➕ Add Levers
                       {addedLeversRows.length > 0 && <span style={{ fontSize: 9, opacity: 0.8 }}>({addedLeversRows.length} active)</span>}
                     </button>
-                  </>)}
+                  )}
                   <div style={{ fontSize: 11, color: C.grey }}>{library.length} product famil{library.length === 1 ? "y" : "ies"}</div>
                 </div>
               </div>
