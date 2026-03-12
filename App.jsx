@@ -811,7 +811,7 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
               </div>
               {(() => {
                 const maxVal = watchResult.base2025.total * 1.05;
-                const baseW  = Math.min(100, (watchResult.base2025.total / maxVal) * 100);
+                const targetW = Math.min(100, (TARGET_KT / maxVal) * 100);
                 return Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
                   const total = watchResult.scenarios[key]?.[2030]?.total ?? 0;
                   const barW  = Math.min(100, Math.max(0, (total / maxVal) * 100));
@@ -821,7 +821,7 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                         <div style={{ width: 90, fontSize: 11, fontWeight: 700, color, flexShrink: 0 }}>{label}</div>
                         <div style={{ flex: 1, background: "#e8f0e8", borderRadius: 4, height: 18, position: "relative" }}>
                           <div style={{ width: `${barW}%`, height: "100%", background: color, borderRadius: 4, opacity: 0.85 }} />
-                          <div style={{ position: "absolute", left: `${baseW}%`, top: 0, bottom: 0, width: 2, background: C.grey }} title="2025 baseline" />
+                          <div style={{ position: "absolute", left: `${targetW}%`, top: 0, bottom: 0, width: 2, background: "#e53935" }} title="5 222 kt target" />
                         </div>
                         <div style={{ width: 70, textAlign: "right", fontSize: 11, fontWeight: 600 }}>
                           {fmtKt(total)} kt
@@ -831,8 +831,8 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                   );
                 });
               })()}
-              <div style={{ fontSize: 10, color: C.grey, marginTop: 6 }}>
-                Grey line = 2025 baseline ({fmtKt(watchResult.base2025.total)} kt CO₂e)
+              <div style={{ fontSize: 10, color: "#e53935", marginTop: 6 }}>
+                Red line = 5 222 kt CO₂e target
               </div>
             </div>
           </div>
