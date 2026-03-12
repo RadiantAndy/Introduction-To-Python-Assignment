@@ -163,7 +163,13 @@ function aggregateBaseline(rows) {
     agg["scalar quantity"] += parseNum(row["scalar quantity"]);
     agg._rowCount++;
   }
-  return [...map.values()];
+  const result = [...map.values()];
+  // Diagnostic: log unique product line codes so we can verify lever matching
+  const uniqueLines = [...new Set(result.map((r) => String(r["Ref product line code"] ?? "")))].sort();
+  const uniqueFamilies = [...new Set(result.map((r) => String(r["Ref product family"] ?? "")))].sort();
+  console.log("[Baseline] Unique product line codes:", uniqueLines);
+  console.log("[Baseline] Unique product families:", uniqueFamilies);
+  return result;
 }
 
 // ── Apply levers to 2025 baseline (JS port of apply_levers_v3) ───────────────
@@ -240,7 +246,11 @@ function applyLeversV3(baseline, levers) {
         if (productFamily && String(row["Ref product family"]    || "").trim() !== productFamily) continue;
         matchedIdx.push(i);
       }
-      if (!matchedIdx.length) continue;
+      if (!matchedIdx.length) {
+        if (productLine || productFamily)
+          console.warn(`[Lever no match] line="${productLine}" family="${productFamily}" — lever skipped`);
+        continue;
+      }
 
       const duration = endYear !== startYear ? endYear - startYear : 1;
       for (const yr of FUTURE_YEARS) {
