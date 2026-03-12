@@ -452,6 +452,7 @@ function buildLeversTabRows(spec) {
         "Completion year": spec.completion_year || 2030,
         "Risk/Confidence status": RISK_LONG[entry.risk] || RISK_LONG.low,
         "Risk/Confidence status ": entry.risk === "delivered" ? "low" : entry.risk || "low",
+        "Risk/Confidence status.1": entry.risk === "delivered" ? "low" : entry.risk || "low",
         Hypothesis: entry.hypothesis || "",
       });
     }
