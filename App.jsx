@@ -305,6 +305,7 @@ function applyLeversV3(baseline, levers) {
     scenarios: scenarioResults,
     volumeGrowth,
     byGroup,
+    debugFirstRow: baseline[0] ?? {},
     rowCount: n,
     leverCount: levers.length,
   };
@@ -594,6 +595,80 @@ const WATCH_SCENARIOS = {
   all:              { label: "All levers",  color: "#1a3c2e" },
 };
 const WATCH_YEARS = [2026, 2027, 2028, 2029, 2030];
+const ALL_YEARS   = [2025, ...WATCH_YEARS];
+
+// ── SVG Line Chart for scenario trajectories ──────────────────────────────────
+function TrajectoryLineChart({ watchResult }) {
+  const W = 620, H = 260, PAD = { top: 20, right: 20, bottom: 36, left: 60 };
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top  - PAD.bottom;
+
+  const lines = Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
+    const pts = ALL_YEARS.map((yr) => {
+      const total = yr === 2025
+        ? watchResult.base2025.total
+        : watchResult.scenarios[key]?.[yr]?.total ?? null;
+      return { yr, total };
+    });
+    return { key, label, color, pts };
+  });
+
+  const allVals = lines.flatMap((l) => l.pts.map((p) => p.total)).filter((v) => v != null);
+  if (!allVals.length || allVals.every((v) => v === 0)) return (
+    <div style={{ padding: 20, textAlign: "center", color: C.grey, fontSize: 12 }}>
+      No data yet — check debug panel below.
+    </div>
+  );
+
+  const minV = Math.min(...allVals) * 0.97;
+  const maxV = Math.max(...allVals) * 1.03;
+  const xScale = (yr) => PAD.left + ((yr - 2025) / 5) * innerW;
+  const yScale = (v)  => PAD.top  + innerH - ((v - minV) / (maxV - minV)) * innerH;
+
+  const fmtKt = (v) => v == null ? "" : (v / 1e6).toLocaleString(undefined, { maximumFractionDigits: 1 }) + " kt";
+  const yTicks = 5;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", maxWidth: W, display: "block" }}>
+      {/* Y grid + labels */}
+      {Array.from({ length: yTicks + 1 }, (_, i) => {
+        const v = minV + (i / yTicks) * (maxV - minV);
+        const y = yScale(v);
+        return (
+          <g key={i}>
+            <line x1={PAD.left} x2={W - PAD.right} y1={y} y2={y} stroke="#e0ece0" strokeWidth={1} />
+            <text x={PAD.left - 6} y={y + 4} fontSize={9} fill={C.grey} textAnchor="end">{fmtKt(v)}</text>
+          </g>
+        );
+      })}
+      {/* X axis labels */}
+      {ALL_YEARS.map((yr) => (
+        <text key={yr} x={xScale(yr)} y={H - 6} fontSize={10} fill={C.grey} textAnchor="middle">{yr}</text>
+      ))}
+      {/* Lines */}
+      {lines.map(({ key, color, pts }) => {
+        const valid = pts.filter((p) => p.total != null);
+        if (valid.length < 2) return null;
+        const d = valid.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.yr)},${yScale(p.total)}`).join(" ");
+        return (
+          <g key={key}>
+            <path d={d} fill="none" stroke={color} strokeWidth={2.2} strokeLinejoin="round" />
+            {valid.map((p) => (
+              <circle key={p.yr} cx={xScale(p.yr)} cy={yScale(p.total)} r={3.5} fill={color} />
+            ))}
+          </g>
+        );
+      })}
+      {/* Legend */}
+      {lines.map(({ key, label, color }, i) => (
+        <g key={key} transform={`translate(${PAD.left + i * 140}, ${H - 10})`}>
+          <line x1={0} x2={14} y1={-4} y2={-4} stroke={color} strokeWidth={2.5} />
+          <text x={18} y={0} fontSize={9} fill={C.text}>{label}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
 
 function WatchPill({ icon, label, ok, loading, error, count, unit }) {
   const bg = loading ? "#e8f0e8" : error ? "#ffebee" : ok ? "#e8f5e9" : "#f4f6f4";
@@ -798,8 +873,16 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
             </div>
           )}
 
+          {/* Line chart */}
+          <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14, marginBottom: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
+              Emissions Trajectory 2025–2030 (kt CO₂e)
+            </div>
+            <TrajectoryLineChart watchResult={watchResult} />
+          </div>
+
           {/* Bar chart */}
-          <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14 }}>
+          <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14, marginBottom: 16 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
               2030 Scenario Comparison
             </div>
@@ -829,6 +912,23 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
               Grey line = 2025 baseline ({fmtKt(watchResult.base2025.total)} kt CO₂e) · Bars show 2030 totals
             </div>
           </div>
+
+          {/* Debug panel */}
+          <details style={{ background: "#fffde7", border: "1px solid #f9a825", borderRadius: 7, padding: "8px 12px", fontSize: 11 }}>
+            <summary style={{ fontWeight: 700, color: "#e65100", cursor: "pointer", marginBottom: 6 }}>
+              🐛 Debug — raw df_2025 first row &amp; byGroup
+            </summary>
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>df_2025 first row (all keys + values):</div>
+              <pre style={{ background: "#fff8e1", padding: 8, borderRadius: 4, overflowX: "auto", maxHeight: 200, fontSize: 10 }}>
+                {JSON.stringify(watchResult.debugFirstRow || {}, null, 2)}
+              </pre>
+              <div style={{ fontWeight: 700, margin: "8px 0 4px" }}>byGroup (df_grouped2) — first 3 rows:</div>
+              <pre style={{ background: "#fff8e1", padding: 8, borderRadius: 4, overflowX: "auto", maxHeight: 300, fontSize: 10 }}>
+                {JSON.stringify(watchResult.byGroup?.slice(0, 3) || [], null, 2)}
+              </pre>
+            </div>
+          </details>
         </>
       )}
     </div>
