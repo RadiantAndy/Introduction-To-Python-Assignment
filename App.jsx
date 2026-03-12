@@ -1451,6 +1451,10 @@ export default function App() {
   const [library, setLibrary] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [viewTab, setViewTab] = useState("levers_input");
+  const [baselineLines, setBaselineLines] = useState([]);          // ["L1","L2",…]
+  const [baselineFamiliesByLine, setBaselineFamiliesByLine] = useState({}); // {L5:["V362",…]}
+  const [targetLine, setTargetLine] = useState("");
+  const [targetFamily, setTargetFamily] = useState("");
   const endRef = useRef(null);
 
   // ── Load df_2025.xlsx from public/ on mount ──────────────────────────────
@@ -1470,6 +1474,19 @@ export default function App() {
         const aggregated = aggregateBaseline(rows);
         console.log(`df_2025: ${rows.length} rows → ${aggregated.length} aggregated groups`);
         setTrajData(aggregated);
+        // Build product-line → families lookup for the target dropdowns
+        const famMap = {};
+        for (const row of aggregated) {
+          const line = String(row["Ref product line code"] ?? "").trim();
+          const fam  = String(row["Ref product family"]    ?? "").trim();
+          if (!line) continue;
+          if (!famMap[line]) famMap[line] = new Set();
+          if (fam) famMap[line].add(fam);
+        }
+        setBaselineLines(Object.keys(famMap).sort());
+        setBaselineFamiliesByLine(Object.fromEntries(
+          Object.entries(famMap).map(([k, v]) => [k, [...v].sort()])
+        ));
       })
       .catch((e) => setTrajError(e.message))
       .finally(() => setTrajLoading(false));
@@ -1619,8 +1636,14 @@ export default function App() {
 
   // ── Manage generated levers in Watch tab ─────────────────────────────────
   function addLeversToWatch() {
-    if (!allLtRows.length) return;
-    setAddedLeversRows((prev) => [...prev, ...allLtRows]);
+    if (!allLtRows.length || !targetLine) return;
+    // Override the AI-generated product codes with the user's actual baseline selection
+    const rows = allLtRows.map((r) => ({
+      ...r,
+      "product line code": targetLine,
+      "product family":    targetFamily || "",
+    }));
+    setAddedLeversRows((prev) => [...prev, ...rows]);
   }
   function removeAddedLevers() {
     setAddedLeversRows([]);
@@ -1892,16 +1915,37 @@ export default function App() {
                       ↓ Download Levers Tab
                     </button>
                   )}
-                  {viewTab === "levers_tab" && allLtRows.length > 0 && (
+                  {viewTab === "levers_tab" && allLtRows.length > 0 && (<>
+                    {/* Product-line / family selectors — map AI output to real baseline codes */}
+                    <select
+                      value={targetLine}
+                      onChange={e => { setTargetLine(e.target.value); setTargetFamily(""); }}
+                      title="Map to a real product line from the baseline"
+                      style={{ fontSize: 11, padding: "4px 6px", borderRadius: 6, border: "1px solid #cdd8d0", color: targetLine ? C.text : C.grey, fontWeight: targetLine ? 700 : 400 }}
+                    >
+                      <option value="">— select product line —</option>
+                      {baselineLines.map(l => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                    <select
+                      value={targetFamily}
+                      onChange={e => setTargetFamily(e.target.value)}
+                      disabled={!targetLine}
+                      title="Optionally restrict to one family within the product line"
+                      style={{ fontSize: 11, padding: "4px 6px", borderRadius: 6, border: "1px solid #cdd8d0", color: targetFamily ? C.text : C.grey, fontWeight: targetFamily ? 700 : 400 }}
+                    >
+                      <option value="">— all families —</option>
+                      {(baselineFamiliesByLine[targetLine] || []).map(f => <option key={f} value={f}>{f}</option>)}
+                    </select>
                     <button
                       onClick={addLeversToWatch}
-                      title="Append these levers to the active levers file and recompute scenarios"
-                      style={{ background: C.mid, border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", color: C.white, display: "inline-flex", alignItems: "center", gap: 5 }}
+                      disabled={!targetLine}
+                      title={targetLine ? "Append these levers to the active levers file and recompute scenarios" : "Select a product line first"}
+                      style={{ background: targetLine ? C.mid : "#ccc", border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: targetLine ? "pointer" : "not-allowed", color: C.white, display: "inline-flex", alignItems: "center", gap: 5 }}
                     >
                       ➕ Add Levers
                       {addedLeversRows.length > 0 && <span style={{ fontSize: 9, opacity: 0.8 }}>({addedLeversRows.length} active)</span>}
                     </button>
-                  )}
+                  </>)}
                   <div style={{ fontSize: 11, color: C.grey }}>{library.length} product famil{library.length === 1 ? "y" : "ies"}</div>
                 </div>
               </div>
