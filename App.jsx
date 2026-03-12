@@ -187,6 +187,22 @@ function applyLeversV3(baseline, levers) {
   const leversEF  = levers.filter((l) => String(l[ATTR_COL] || "").trim() !== "Volume");
   const leversVol = levers.filter((l) => String(l[ATTR_COL] || "").trim() === "Volume");
 
+  // Diagnostic: check generated lever matching against baseline
+  const generatedEF = leversEF.filter((l) => l._isGenerated);
+  if (generatedEF.length > 0) {
+    const baselineKeys = new Set(baseline.map((r) => `${String(r["Ref product line code"]||"").trim()}|||${String(r["Ref product family"]||"").trim()}`));
+    const genKeys = [...new Set(generatedEF.map((l) => `${String(l["product line code"]||"").trim()}|||${String(l["product family"]||"").trim()}`))];
+    console.log(`[Generated levers] ${generatedEF.length} EF rows, unique combos:`, genKeys);
+    genKeys.forEach((k) => {
+      const [line, fam] = k.split("|||");
+      const lineMatch = baseline.filter((r) => String(r["Ref product line code"]||"").trim() === line).length;
+      const famMatch  = baseline.filter((r) => String(r["Ref product family"]||"").trim() === fam).length;
+      const bothMatch = baseline.filter((r) => String(r["Ref product line code"]||"").trim() === line && String(r["Ref product family"]||"").trim() === fam).length;
+      const sampleVal = generatedEF.find((l) => l["product line code"] === line)?.[`Annual growth/degrowth to be applied`];
+      console.log(`  line="${line}" fam="${fam}": lineOnly=${lineMatch} famOnly=${famMatch} both=${bothMatch} sampleGrowthVal=${sampleVal}`);
+    });
+  }
+
   // Risk/Confidence status.1 = second occurrence (pandas naming convention)
   const RISK_COL = "Risk/Confidence status.1";
   const baselineLevers = leversEF.filter(
@@ -248,7 +264,7 @@ function applyLeversV3(baseline, levers) {
       }
       if (!matchedIdx.length) {
         if (productLine || productFamily)
-          console.warn(`[Lever no match] line="${productLine}" family="${productFamily}" — lever skipped`);
+          console.warn(`[Lever no match${lever._isGenerated ? " GENERATED" : ""}] line="${productLine}" family="${productFamily}" — lever skipped`);
         continue;
       }
 
@@ -464,6 +480,7 @@ function buildLeversTabRows(spec) {
         "Risk/Confidence status ": entry.risk === "delivered" ? "low" : entry.risk || "low",
         "Risk/Confidence status.1": entry.risk === "delivered" ? "low" : entry.risk || "low",
         Hypothesis: entry.hypothesis || "",
+        _isGenerated: true,
       });
     }
   }
