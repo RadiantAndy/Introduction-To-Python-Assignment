@@ -625,8 +625,10 @@ const WATCH_YEARS = [2026, 2027, 2028, 2029, 2030];
 const ALL_YEARS   = [2025, ...WATCH_YEARS];
 
 // ── SVG Line Chart for scenario trajectories ──────────────────────────────────
+const TARGET_KT = 5222 * 1e6; // 5 222 kt CO₂e target (in kg, matching data units)
+
 function TrajectoryLineChart({ watchResult }) {
-  const W = 620, H = 260, PAD = { top: 20, right: 20, bottom: 36, left: 60 };
+  const W = 760, H = 260, PAD = { top: 20, right: 160, bottom: 20, left: 60 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top  - PAD.bottom;
 
@@ -647,31 +649,48 @@ function TrajectoryLineChart({ watchResult }) {
     </div>
   );
 
-  const minV = Math.min(...allVals) * 0.97;
-  const maxV = Math.max(...allVals) * 1.03;
+  // Include target in domain so it's always visible
+  const domainVals = [...allVals, TARGET_KT];
+  const minV = Math.min(...domainVals) * 0.97;
+  const maxV = Math.max(...domainVals) * 1.03;
   const xScale = (yr) => PAD.left + ((yr - 2025) / 5) * innerW;
   const yScale = (v)  => PAD.top  + innerH - ((v - minV) / (maxV - minV)) * innerH;
 
   const fmtKt = (v) => v == null ? "" : (v / 1e6).toLocaleString(undefined, { maximumFractionDigits: 1 }) + " kt";
   const yTicks = 5;
+  const gridRight = W - PAD.right;
+  const legendX = gridRight + 12;
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", maxWidth: W, display: "block" }}>
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", display: "block" }}>
       {/* Y grid + labels */}
       {Array.from({ length: yTicks + 1 }, (_, i) => {
         const v = minV + (i / yTicks) * (maxV - minV);
         const y = yScale(v);
         return (
           <g key={i}>
-            <line x1={PAD.left} x2={W - PAD.right} y1={y} y2={y} stroke="#e0ece0" strokeWidth={1} />
+            <line x1={PAD.left} x2={gridRight} y1={y} y2={y} stroke="#e0ece0" strokeWidth={1} />
             <text x={PAD.left - 6} y={y + 4} fontSize={9} fill={C.grey} textAnchor="end">{fmtKt(v)}</text>
           </g>
         );
       })}
       {/* X axis labels */}
       {ALL_YEARS.map((yr) => (
-        <text key={yr} x={xScale(yr)} y={H - 6} fontSize={10} fill={C.grey} textAnchor="middle">{yr}</text>
+        <text key={yr} x={xScale(yr)} y={H - 4} fontSize={10} fill={C.grey} textAnchor="middle">{yr}</text>
       ))}
+      {/* Target line at 5 222 kt */}
+      {(() => {
+        const yT = yScale(TARGET_KT);
+        return (
+          <g>
+            <line x1={PAD.left} x2={gridRight} y1={yT} y2={yT}
+              stroke="#e53935" strokeWidth={1.5} strokeDasharray="6,4" />
+            <text x={PAD.left + 4} y={yT - 3} fontSize={8} fill="#e53935">
+              Target 5 222 kt
+            </text>
+          </g>
+        );
+      })()}
       {/* Lines */}
       {lines.map(({ key, color, pts }) => {
         const valid = pts.filter((p) => p.total != null);
@@ -686,13 +705,19 @@ function TrajectoryLineChart({ watchResult }) {
           </g>
         );
       })}
-      {/* Legend */}
+      {/* Legend — right of grid */}
       {lines.map(({ key, label, color }, i) => (
-        <g key={key} transform={`translate(${PAD.left + i * 140}, ${H - 10})`}>
-          <line x1={0} x2={14} y1={-4} y2={-4} stroke={color} strokeWidth={2.5} />
-          <text x={18} y={0} fontSize={9} fill={C.text}>{label}</text>
+        <g key={key} transform={`translate(${legendX}, ${PAD.top + i * 22})`}>
+          <line x1={0} x2={16} y1={5} y2={5} stroke={color} strokeWidth={2.5} />
+          <circle cx={8} cy={5} r={3} fill={color} />
+          <text x={22} y={9} fontSize={10} fill={C.text}>{label}</text>
         </g>
       ))}
+      {/* Target legend entry */}
+      <g transform={`translate(${legendX}, ${PAD.top + lines.length * 22 + 6})`}>
+        <line x1={0} x2={16} y1={5} y2={5} stroke="#e53935" strokeWidth={1.5} strokeDasharray="5,3" />
+        <text x={22} y={9} fontSize={10} fill="#e53935">Target (5 222 kt)</text>
+      </g>
     </svg>
   );
 }
