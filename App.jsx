@@ -1459,8 +1459,8 @@ export default function App() {
   const [watchResult, setWatchResult]     = useState(null);
   const [watchComputing, setWatchComputing] = useState(false);
 
-  const [history, setHistory] = useState([]);
-  const [chatLog, setChatLog] = useState([]);
+  const [chatLog, setChatLog] = useState([]); // {role,text,ok?,convId,rawContent?}
+  const [dragOver, setDragOver] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -1549,24 +1549,37 @@ export default function App() {
     return () => clearTimeout(id);
   }, [trajData, combinedLevers]);
 
+  // Build LLM history from chatLog (only completed conversation turns)
+  function buildHistory(log) {
+    return log
+      .filter((m) => m.rawContent !== undefined)
+      .map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.rawContent }));
+  }
+
+  // Remove an entire conversation (user prompt + AI reply) by convId
+  function removeConversation(convId) {
+    setChatLog((prev) => prev.filter((m) => m.convId !== convId));
+  }
+
   // ── AI send ──────────────────────────────────────────────────────────────
   async function send(text) {
     const msg = (text || input).trim();
-    if (!msg) return;
+    if (!msg || loading) return;
     setInput("");
     setError(null);
     setLoading(true);
-    const log = [...chatLog, { role: "user", text: msg }];
-    setChatLog(log);
+    const convId = `conv_${Date.now()}`;
+    const userEntry = { role: "user", text: msg, rawContent: msg, convId };
+    setChatLog((prev) => [...prev, userEntry]);
     try {
       const sysPrompt = buildSystemPrompt(baselineLines, baselineFamiliesByLine, baselineCountries);
-      const { text: aiText, messages: hist } = await callClaude(msg, history, sysPrompt);
-      setHistory(hist.concat([{ role: "assistant", content: aiText }]));
+      const hist = buildHistory(chatLog); // history from completed turns only
+      const { text: aiText } = await callClaude(msg, hist, sysPrompt);
       let parsed = null;
-      try { parsed = tryJSON(aiText); } catch { /* plain text response — ask for more info */ }
+      try { parsed = tryJSON(aiText); } catch { /* plain text response */ }
 
+      let aiEntry;
       if (parsed) {
-        // Validate required fields before building rows
         const missing = [];
         if (!parsed.product_line_code) missing.push("product line code");
         if (!(parsed.levers_input?.migration_rate > 0)) missing.push("migration rate");
@@ -1580,25 +1593,66 @@ export default function App() {
         if (!hasCountry) missing.push("country code for each lever entry");
 
         if (missing.length > 0) {
-          setChatLog([...log, { role: "assistant", text: `To generate levers I still need: ${missing.join(", ")}. Could you provide those?` }]);
+          aiEntry = { role: "assistant", rawContent: aiText, convId,
+            text: `To generate levers I still need: ${missing.join(", ")}. Could you provide those?` };
         } else {
           const liRow  = buildLeversInputRow(parsed);
           const ltRows = buildLeversTabRows(parsed);
           const entry  = { id: `ai_${Date.now()}`, product_family: parsed.product_family || "Unknown", product_line: parsed.product_line_code || "", liRow, ltRows, _spec: parsed };
           setLibrary((prev) => [...prev, entry]);
           setActiveId(entry.id);
-          setChatLog([...log, { role: "assistant", ok: true, text: `✨ Added "${parsed.product_family}" (${parsed.product_line_code}) — ${ltRows.length} lever rows. Switch to Levers tab → Add Levers to apply.` }]);
+          aiEntry = { role: "assistant", rawContent: aiText, convId, ok: true,
+            text: `✨ Added "${parsed.product_family}" (${parsed.product_line_code}) — ${ltRows.length} lever rows. Switch to Levers tab → Add Levers to apply.` };
         }
       } else {
-        setChatLog([...log, { role: "assistant", text: aiText }]);
+        aiEntry = { role: "assistant", rawContent: aiText, convId, text: aiText };
       }
+      setChatLog((prev) => [...prev, aiEntry]);
     } catch (e) {
       setError("API error: " + e.message);
+      setChatLog((prev) => prev.filter((m) => m.convId !== convId)); // remove orphan user msg
     } finally {
       setLoading(false);
       setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 80);
     }
   }
+
+  // ── File-drop: parse Excel/CSV → send to LLM as text ─────────────────────
+  async function sendFile(file) {
+    if (!file) return;
+    try {
+      const ext = file.name.split(".").pop().toLowerCase();
+      let rows;
+      if (ext === "csv") {
+        const text = await file.text();
+        const parsed = parseCSV(text);
+        const headers = parsed[0] || [];
+        rows = parsed.slice(1, 31).map((cells) => {
+          const obj = {};
+          headers.forEach((h, i) => { if (cells[i] !== "") obj[h] = cells[i]; });
+          return obj;
+        });
+      } else {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(ws, { defval: "" }).slice(0, 30);
+      }
+      const preview = rows.map((r) => Object.entries(r).filter(([,v]) => v !== "").map(([k,v]) => `${k}: ${v}`).join(" | ")).join("\n");
+      const fileMsg = `I'm sharing a lever file "${file.name}". Please extract lever assumptions from this data and return the JSON schema. Here are the first rows:\n\n${preview}`;
+      send(fileMsg);
+    } catch (e) {
+      setError(`Could not parse file: ${e.message}`);
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) sendFile(file);
+  }
+
 
   // ── Derived data ─────────────────────────────────────────────────────────
   const allLiRows = library.filter((e) => e.liRow).map((e) => e.liRow);
@@ -1668,7 +1722,19 @@ export default function App() {
   // ── Manage generated levers in Watch tab ─────────────────────────────────
   function addLeversToWatch() {
     if (!allLtRows.length) return;
+    // Verify lever product-line codes exist in the baseline before adding
+    if (trajData?.length) {
+      const baseLineSet = new Set(trajData.map((r) => String(r["Ref product line code"] ?? "").trim()));
+      const missingLines = [...new Set(
+        allLtRows.map((r) => String(r["product line code"] ?? "").trim()).filter(Boolean)
+      )].filter((l) => !baseLineSet.has(l));
+      if (missingLines.length) {
+        setError(`Lever product line(s) not found in baseline: ${missingLines.join(", ")}. Valid codes: ${[...baseLineSet].filter(Boolean).sort().join(", ")}`);
+        return;
+      }
+    }
     setAddedLeversRows((prev) => [...prev, ...allLtRows]);
+    setError(null);
   }
   function removeAddedLevers() {
     setAddedLeversRows([]);
@@ -1784,7 +1850,7 @@ export default function App() {
                 <div style={{ padding: "8px 12px 6px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: C.text }}>Library ({library.length})</span>
                   <button
-                    onClick={() => { setLibrary([]); setActiveId(null); setChatLog([]); setHistory([]); setAddedLeversRows([]); setError(null); }}
+                    onClick={() => { setLibrary([]); setActiveId(null); setChatLog([]); setAddedLeversRows([]); setError(null); }}
                     title="Clear everything and start over"
                     style={{ background: "none", border: `1px solid ${C.grey}55`, borderRadius: 5, padding: "2px 8px", fontSize: 10, color: C.grey, cursor: "pointer", fontWeight: 600 }}
                   >
@@ -1827,8 +1893,21 @@ export default function App() {
               </div>
             )}
 
-            {/* Chat messages */}
-            <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* Chat messages + drop zone */}
+            <div
+              style={{ flex: 1, overflowY: "auto", padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8,
+                position: "relative", outline: dragOver ? `2px dashed ${C.bright}` : "none", background: dragOver ? `${C.light}` : undefined, transition: "background 0.15s" }}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+            >
+              {dragOver && (
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none", zIndex: 10 }}>
+                  <div style={{ background: C.white, border: `2px dashed ${C.bright}`, borderRadius: 12, padding: "20px 32px", fontSize: 13, fontWeight: 700, color: C.mid }}>
+                    Drop lever file here (.xlsx or .csv)
+                  </div>
+                </div>
+              )}
               {chatLog.length === 0 && (
                 <div>
                   <div style={{ padding: "10px 0 6px", fontSize: 11, fontWeight: 700, color: C.grey, textTransform: "uppercase", letterSpacing: 1 }}>
@@ -1851,29 +1930,44 @@ export default function App() {
                   ))}
                 </div>
               )}
-              {chatLog.map((m, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", gap: 4, alignItems: "flex-start" }}>
-                  {m.role === "user" && (
-                    <button
-                      onClick={() => { setChatLog((prev) => prev.filter((_, j) => j !== i)); setHistory((prev) => prev.filter((_, j) => j !== i)); }}
-                      title="Remove this message"
-                      style={{ background: "none", border: "none", cursor: "pointer", color: C.grey, fontSize: 12, padding: "4px 2px", lineHeight: 1, flexShrink: 0 }}
-                    >×</button>
-                  )}
-                  <div
-                    style={{
-                      maxWidth: "90%",
-                      background: m.role === "user" ? `linear-gradient(135deg,${C.mid},${C.dark})` : m.ok ? C.light : C.white,
-                      color: m.role === "user" ? C.white : C.text,
-                      border: m.role === "user" ? "none" : `1px solid ${m.ok ? C.bright + "55" : "#dde8dd"}`,
-                      borderRadius: m.role === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-                      padding: "8px 12px", fontSize: 12, lineHeight: 1.6,
-                    }}
-                  >
-                    {m.text}
+              {(() => {
+                // Group messages into conversations by convId
+                const groups = [];
+                for (const m of chatLog) {
+                  if (m.role === "user" && m.convId) {
+                    groups.push({ convId: m.convId, messages: [m] });
+                  } else if (groups.length && m.convId === groups[groups.length - 1].convId) {
+                    groups[groups.length - 1].messages.push(m);
+                  } else {
+                    groups.push({ convId: m.convId || null, messages: [m] });
+                  }
+                }
+                return groups.map((g) => (
+                  <div key={g.convId || Math.random()} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {g.convId && (
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button
+                          onClick={() => removeConversation(g.convId)}
+                          title="Delete this conversation"
+                          style={{ background: "none", border: "none", cursor: "pointer", color: C.grey, fontSize: 11, padding: "0 2px", lineHeight: 1 }}
+                        >✕ delete</button>
+                      </div>
+                    )}
+                    {g.messages.map((m, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                        <div style={{
+                          maxWidth: "90%",
+                          background: m.role === "user" ? `linear-gradient(135deg,${C.mid},${C.dark})` : m.ok ? C.light : C.white,
+                          color: m.role === "user" ? C.white : C.text,
+                          border: m.role === "user" ? "none" : `1px solid ${m.ok ? C.bright + "55" : "#dde8dd"}`,
+                          borderRadius: m.role === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+                          padding: "8px 12px", fontSize: 12, lineHeight: 1.6,
+                        }}>{m.text}</div>
+                      </div>
+                    ))}
                   </div>
-                </div>
-              ))}
+                ));
+              })()}
               {loading && (
                 <div style={{ display: "flex" }}>
                   <div style={{ background: C.white, border: "1px solid #dde8dd", borderRadius: "14px 14px 14px 4px", padding: "9px 13px", display: "flex", gap: 5 }}>
@@ -1894,7 +1988,7 @@ export default function App() {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                  placeholder="Describe a product family — lever types, improvement %, migration rate, hub, risk…"
+                  placeholder="Describe a product family… or drag & drop a lever file (.xlsx / .csv)"
                   disabled={loading}
                   rows={2}
                   style={{
