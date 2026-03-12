@@ -627,16 +627,17 @@ const ALL_YEARS   = [2025, ...WATCH_YEARS];
 // ── SVG Line Chart for scenario trajectories ──────────────────────────────────
 const TARGET_KT = 5222 * 1e6; // 5 222 kt CO₂e target (in kg, matching data units)
 
-function TrajectoryLineChart({ watchResult }) {
+function TrajectoryLineChart({ watchResult, mult = 1 }) {
   const W = 760, H = 260, PAD = { top: 20, right: 160, bottom: 20, left: 60 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top  - PAD.bottom;
 
   const lines = Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
     const pts = ALL_YEARS.map((yr) => {
-      const total = yr === 2025
+      const raw = yr === 2025
         ? watchResult.base2025.total
         : watchResult.scenarios[key]?.[yr]?.total ?? null;
+      const total = raw != null ? raw * mult : null;
       return { yr, total };
     });
     return { key, label, color, pts };
@@ -749,8 +750,11 @@ function WatchCard({ label, value, sub, color }) {
 
 // ── Trajectory Watch tab ──────────────────────────────────────────────────────
 function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoading, leversError, onUploadLevers, watchResult, watchComputing }) {
+  const [growthRate, setGrowthRate] = React.useState(4);
+  const mult = 1 + growthRate / 100;
+
   const fmtKt = (v) =>
-    v != null ? (v / 1e6).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "—";
+    v != null ? ((v * mult) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "—";
   const fmtPct = (v, base) => {
     if (base == null || v == null) return "—";
     const p = ((v - base) / base) * 100;
@@ -780,6 +784,39 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
         </label>
       </div>
 
+      {/* ── Growth rate control ── */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+        background: C.white, border: "1px solid #cdd8d0", borderRadius: 8,
+        padding: "10px 14px", marginBottom: 12,
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.dark, whiteSpace: "nowrap" }}>
+          Volume Growth Rate
+        </div>
+        <input
+          type="range" min={0} max={20} step={0.5} value={growthRate}
+          onChange={(e) => setGrowthRate(parseFloat(e.target.value))}
+          style={{ flex: "1 1 180px", accentColor: C.mid, cursor: "pointer" }}
+        />
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <input
+            type="number" min={0} max={20} step={0.5} value={growthRate}
+            onChange={(e) => setGrowthRate(Math.min(20, Math.max(0, parseFloat(e.target.value) || 0)))}
+            style={{
+              width: 54, padding: "3px 6px", fontSize: 13, fontWeight: 700,
+              border: "1px solid #cdd8d0", borderRadius: 5, textAlign: "right", color: C.mid,
+            }}
+          />
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.mid }}>%</span>
+        </div>
+        <div style={{ fontSize: 11, color: C.grey, whiteSpace: "nowrap" }}>
+          multiplier&nbsp;<strong style={{ color: C.dark }}>×{mult.toFixed(4)}</strong>
+        </div>
+        <div style={{ fontSize: 10, color: C.grey, marginLeft: "auto" }}>
+          All emissions figures include this growth factor
+        </div>
+      </div>
+
       {leversError && (
         <div style={{ background: "#ffebee", border: "1px solid #ef9a9a", borderRadius: 7, padding: "8px 12px", fontSize: 12, color: C.rHigh, marginBottom: 12 }}>
           {leversError}
@@ -801,7 +838,7 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
               <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
                 Emissions Trajectory 2025–2030 (kt CO₂e)
               </div>
-              <TrajectoryLineChart watchResult={watchResult} />
+              <TrajectoryLineChart watchResult={watchResult} mult={mult} />
             </div>
 
             {/* Bar chart */}
@@ -810,11 +847,11 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                 2030 Scenario Comparison
               </div>
               {(() => {
-                const maxVal = watchResult.base2025.total * 1.05;
+                const maxVal = watchResult.base2025.total * mult * 1.05;
                 const targetW = Math.min(100, (TARGET_KT / maxVal) * 100);
                 return Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
-                  const total = watchResult.scenarios[key]?.[2030]?.total ?? 0;
-                  const barW  = Math.min(100, Math.max(0, (total / maxVal) * 100));
+                  const rawTotal = watchResult.scenarios[key]?.[2030]?.total ?? 0;
+                  const barW  = Math.min(100, Math.max(0, (rawTotal * mult / maxVal) * 100));
                   return (
                     <div key={key} style={{ marginBottom: 10 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -824,7 +861,7 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                           <div style={{ position: "absolute", left: `${targetW}%`, top: 0, bottom: 0, width: 2, background: "#e53935" }} title="5 222 kt target" />
                         </div>
                         <div style={{ width: 70, textAlign: "right", fontSize: 11, fontWeight: 600 }}>
-                          {fmtKt(total)} kt
+                          {fmtKt(rawTotal)} kt
                         </div>
                       </div>
                     </div>
@@ -1362,7 +1399,7 @@ function LeversTabTable({ rows }) {
 
 // ── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [page, setPage] = useState("trajectory"); // "trajectory" | "levers" | "watch"
+  const [page, setPage] = useState("levers"); // "levers" | "watch"
   const [trajData, setTrajData] = useState(null);
   const [trajLoading, setTrajLoading] = useState(true);
   const [trajError, setTrajError] = useState(null);
@@ -1572,7 +1609,6 @@ export default function App() {
           </div>
           <div style={{ display: "flex", gap: 4 }}>
             {[
-              ["trajectory", "🏠 Trajectory Summary"],
               ["levers", "⚡ Lever Generator"],
               ["watch", "🎯 2030 Trajectory Watch"],
             ].map(([id, label]) => (
@@ -1624,11 +1660,7 @@ export default function App() {
       </div>
 
       {/* ── Page body ── */}
-      {page === "trajectory" ? (
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-          <TrajectorySummary data={trajData} loading={trajLoading} error={trajError} />
-        </div>
-      ) : page === "watch" ? (
+      {page === "watch" ? (
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <TrajectoryWatch
             df2025={trajData} df2025Loading={trajLoading} df2025Error={trajError}
