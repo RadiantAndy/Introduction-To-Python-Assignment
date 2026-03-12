@@ -137,6 +137,35 @@ function parseNum(v) {
   return isNaN(n) ? 0 : n;
 }
 
+// ── Pre-aggregate 340K rows → unique (family × line × country × hub) groups ──
+// Levers match on product_family + product_line_code.
+// Display groups on product_line_code + countries_dest.
+// Including all four in the key preserves full granularity for both.
+const AGG_KEY_COLS = [
+  "Ref product family",
+  "Ref product line code",
+  "Ref countries dest",
+  "Ref hub",
+];
+function aggregateBaseline(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const key = AGG_KEY_COLS.map((k) => String(row[k] ?? "")).join("|||");
+    if (!map.has(key)) {
+      const agg = { _rowCount: 0 };
+      for (const k of AGG_KEY_COLS) agg[k] = row[k] ?? "";
+      for (const c of EMISSION_COLS) agg[c] = 0;
+      agg["scalar quantity"] = 0;
+      map.set(key, agg);
+    }
+    const agg = map.get(key);
+    for (const c of EMISSION_COLS) agg[c] += parseNum(row[c]);
+    agg["scalar quantity"] += parseNum(row["scalar quantity"]);
+    agg._rowCount++;
+  }
+  return [...map.values()];
+}
+
 // ── Apply levers to 2025 baseline (JS port of apply_levers_v3) ───────────────
 function applyLeversV3(baseline, levers) {
   const FUTURE_YEARS = [2026, 2027, 2028, 2029, 2030];
@@ -716,7 +745,8 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
     <div style={{ padding: "14px 16px", overflowY: "auto", height: "100%" }}>
       {/* Status + upload */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-        <WatchPill icon="📊" label="2025 baseline" ok={!!df2025?.length} loading={df2025Loading} error={df2025Error} count={df2025?.length} unit="rows" />
+        <WatchPill icon="📊" label="2025 baseline" ok={!!df2025?.length} loading={df2025Loading} error={df2025Error}
+          count={df2025?.length} unit="aggregated groups" />
         <WatchPill icon="⚙️" label="Levers" ok={!!levers?.length} loading={leversLoading} error={leversError} count={levers?.length} unit="rows" />
         {watchComputing && <span style={{ fontSize: 11, color: C.grey, fontStyle: "italic" }}>Computing scenarios…</span>}
         <label style={{ marginLeft: "auto", background: C.mid, color: C.white, border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -1217,6 +1247,9 @@ export default function App() {
   const endRef = useRef(null);
 
   // ── Load df_2025.xlsx from public/ on mount ──────────────────────────────
+  // raw:true skips SheetJS type coercion (faster); defval:"" avoids undefined.
+  // aggregateBaseline collapses 340K rows → unique key groups before any
+  // computation, cutting applyLeversV3 work from ~500M ops to ~7M ops.
   useEffect(() => {
     fetch("/df_2025.xlsx")
       .then((r) => {
@@ -1224,10 +1257,12 @@ export default function App() {
         return r.arrayBuffer();
       })
       .then((buf) => {
-        const wb = XLSX.read(buf, { type: "array" });
+        const wb = XLSX.read(buf, { type: "array", cellDates: false });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
-        setTrajData(rows);
+        const rows = XLSX.utils.sheet_to_json(ws, { raw: true, defval: "" });
+        const aggregated = aggregateBaseline(rows);
+        console.log(`df_2025: ${rows.length} rows → ${aggregated.length} aggregated groups`);
+        setTrajData(aggregated);
       })
       .catch((e) => setTrajError(e.message))
       .finally(() => setTrajLoading(false));
