@@ -628,6 +628,13 @@ const ALL_YEARS   = [2025, ...WATCH_YEARS];
 const TARGET_KT = 5222 * 1e6; // 5 222 kt CO₂e target (in kg, matching data units)
 
 function TrajectoryLineChart({ watchResult, mult = 1 }) {
+  const [hiddenLines, setHiddenLines] = React.useState(new Set());
+  const toggleLine = (key) => setHiddenLines((prev) => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
   const W = 760, H = 260, PAD = { top: 20, right: 160, bottom: 20, left: 60 };
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top  - PAD.bottom;
@@ -637,12 +644,14 @@ function TrajectoryLineChart({ watchResult, mult = 1 }) {
       const raw = yr === 2025
         ? watchResult.base2025.total
         : watchResult.scenarios[key]?.[yr]?.total ?? null;
-      const total = raw != null ? raw * mult : null;
+      // 2025 is historical — no growth factor applied
+      const total = raw != null ? (yr === 2025 ? raw : raw * mult) : null;
       return { yr, total };
     });
     return { key, label, color, pts };
   });
 
+  const someHidden = hiddenLines.size > 0;
   const allVals = lines.flatMap((l) => l.pts.map((p) => p.total)).filter((v) => v != null);
   if (!allVals.length || allVals.every((v) => v === 0)) return (
     <div style={{ padding: 20, textAlign: "center", color: C.grey, fontSize: 12 }}>
@@ -650,14 +659,14 @@ function TrajectoryLineChart({ watchResult, mult = 1 }) {
     </div>
   );
 
-  // Include target in domain so it's always visible
-  const domainVals = [...allVals, TARGET_KT];
+  const visibleVals = lines.filter(l => !hiddenLines.has(l.key)).flatMap(l => l.pts.map(p => p.total)).filter(v => v != null);
+  const domainVals = [...(visibleVals.length ? visibleVals : allVals), TARGET_KT];
   const minV = Math.min(...domainVals) * 0.97;
   const maxV = Math.max(...domainVals) * 1.03;
   const xScale = (yr) => PAD.left + ((yr - 2025) / 5) * innerW;
   const yScale = (v)  => PAD.top  + innerH - ((v - minV) / (maxV - minV)) * innerH;
 
-  const fmtKt = (v) => v == null ? "" : (v / 1e6).toLocaleString(undefined, { maximumFractionDigits: 1 }) + " kt";
+  const fmtKtAxis = (v) => v == null ? "" : (v / 1e6).toLocaleString(undefined, { maximumFractionDigits: 1 }) + " kt";
   const yTicks = 5;
   const gridRight = W - PAD.right;
   const legendX = gridRight + 12;
@@ -671,7 +680,7 @@ function TrajectoryLineChart({ watchResult, mult = 1 }) {
         return (
           <g key={i}>
             <line x1={PAD.left} x2={gridRight} y1={y} y2={y} stroke="#e0ece0" strokeWidth={1} />
-            <text x={PAD.left - 6} y={y + 4} fontSize={9} fill={C.grey} textAnchor="end">{fmtKt(v)}</text>
+            <text x={PAD.left - 6} y={y + 4} fontSize={9} fill={C.grey} textAnchor="end">{fmtKtAxis(v)}</text>
           </g>
         );
       })}
@@ -679,26 +688,25 @@ function TrajectoryLineChart({ watchResult, mult = 1 }) {
       {ALL_YEARS.map((yr) => (
         <text key={yr} x={xScale(yr)} y={H - 4} fontSize={10} fill={C.grey} textAnchor="middle">{yr}</text>
       ))}
-      {/* Target line at 5 222 kt */}
+      {/* Target line */}
       {(() => {
         const yT = yScale(TARGET_KT);
         return (
           <g>
-            <line x1={PAD.left} x2={gridRight} y1={yT} y2={yT}
-              stroke="#e53935" strokeWidth={1.5} strokeDasharray="6,4" />
-            <text x={PAD.left + 4} y={yT - 3} fontSize={8} fill="#e53935">
-              Target 5 222 kt
-            </text>
+            <line x1={PAD.left} x2={gridRight} y1={yT} y2={yT} stroke="#e53935" strokeWidth={1.5} strokeDasharray="6,4" />
+            <text x={PAD.left + 4} y={yT - 3} fontSize={8} fill="#e53935">Target 5 222 kt</text>
           </g>
         );
       })()}
       {/* Lines */}
       {lines.map(({ key, color, pts }) => {
+        const hidden = hiddenLines.has(key);
+        const dimmed = someHidden && !hidden;
         const valid = pts.filter((p) => p.total != null);
-        if (valid.length < 2) return null;
+        if (valid.length < 2 || hidden) return null;
         const d = valid.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.yr)},${yScale(p.total)}`).join(" ");
         return (
-          <g key={key}>
+          <g key={key} opacity={dimmed ? 0.2 : 1}>
             <path d={d} fill="none" stroke={color} strokeWidth={2.2} strokeLinejoin="round" />
             {valid.map((p) => (
               <circle key={p.yr} cx={xScale(p.yr)} cy={yScale(p.total)} r={3.5} fill={color} />
@@ -706,19 +714,28 @@ function TrajectoryLineChart({ watchResult, mult = 1 }) {
           </g>
         );
       })}
-      {/* Legend — right of grid */}
-      {lines.map(({ key, label, color }, i) => (
-        <g key={key} transform={`translate(${legendX}, ${PAD.top + i * 22})`}>
-          <line x1={0} x2={16} y1={5} y2={5} stroke={color} strokeWidth={2.5} />
-          <circle cx={8} cy={5} r={3} fill={color} />
-          <text x={22} y={9} fontSize={10} fill={C.text}>{label}</text>
-        </g>
-      ))}
-      {/* Target legend entry */}
+      {/* Legend — click to toggle */}
+      {lines.map(({ key, label, color }, i) => {
+        const hidden = hiddenLines.has(key);
+        return (
+          <g key={key} transform={`translate(${legendX}, ${PAD.top + i * 22})`}
+            onClick={() => toggleLine(key)} style={{ cursor: "pointer" }}>
+            <rect x={-2} y={-4} width={148} height={18} fill="transparent" />
+            <line x1={0} x2={16} y1={5} y2={5} stroke={hidden ? "#ccc" : color} strokeWidth={2.5} />
+            <circle cx={8} cy={5} r={3} fill={hidden ? "#ccc" : color} />
+            <text x={22} y={9} fontSize={10} fill={hidden ? "#bbb" : C.text}
+              textDecoration={hidden ? "line-through" : "none"}>{label}</text>
+          </g>
+        );
+      })}
+      {/* Target legend */}
       <g transform={`translate(${legendX}, ${PAD.top + lines.length * 22 + 6})`}>
         <line x1={0} x2={16} y1={5} y2={5} stroke="#e53935" strokeWidth={1.5} strokeDasharray="5,3" />
         <text x={22} y={9} fontSize={10} fill="#e53935">Target (5 222 kt)</text>
       </g>
+      <text x={legendX} y={PAD.top + (lines.length + 1) * 22 + 14} fontSize={8} fill="#bbb" fontStyle="italic">
+        click legend to show/hide
+      </text>
     </svg>
   );
 }
@@ -749,17 +766,64 @@ function WatchCard({ label, value, sub, color }) {
 }
 
 // ── Trajectory Watch tab ──────────────────────────────────────────────────────
-function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoading, leversError, onUploadLevers, watchResult, watchComputing }) {
+function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoading, leversError, onUploadLevers, watchResult, watchComputing, addedLeversRows, onRemoveAddedLevers, onDownloadAddedLevers }) {
   const [growthRate, setGrowthRate] = React.useState(4);
   const mult = 1 + growthRate / 100;
 
-  const fmtKt = (v) =>
-    v != null ? ((v * mult) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "—";
-  const fmtPct = (v, base) => {
-    if (base == null || v == null) return "—";
-    const p = ((v - base) / base) * 100;
+  // fmtKt: raw=true skips mult (for 2025 historical figures)
+  const fmtKt = (v, raw = false) =>
+    v != null ? (((raw ? v : v * mult)) / 1e6).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : "—";
+  // fmtPct: compare 2030 (with growth) vs 2025 (raw/historical)
+  const fmtPct = (v2030raw, base2025raw) => {
+    if (base2025raw == null || v2030raw == null) return "—";
+    const p = ((v2030raw * mult - base2025raw) / base2025raw) * 100;
     return (p > 0 ? "+" : "") + p.toFixed(1) + "%";
   };
+
+  // ── Filters ────────────────────────────────────────────────────────────────
+  const [filterLines, setFilterLines] = React.useState([]);
+  const [filterCountries, setFilterCountries] = React.useState([]);
+
+  const allFilterLines = watchResult
+    ? [...new Set(watchResult.byGroup.map(g => g.lineCode).filter(Boolean))].sort() : [];
+  const allFilterCountries = watchResult
+    ? [...new Set(watchResult.byGroup.map(g => g.countriesDest).filter(Boolean))].sort() : [];
+
+  const isFiltered = filterLines.length > 0 || filterCountries.length > 0;
+  const filteredGroups = (watchResult?.byGroup || []).filter(g =>
+    (filterLines.length === 0 || filterLines.includes(g.lineCode)) &&
+    (filterCountries.length === 0 || filterCountries.includes(g.countriesDest))
+  );
+
+  const filtered2025 = filteredGroups.reduce((s, g) => s + g.overall2025, 0);
+  const filteredScenarios = {};
+  if (watchResult) {
+    for (const yr of WATCH_YEARS) {
+      filteredScenarios[yr] = {};
+      for (const key of Object.keys(WATCH_SCENARIOS))
+        filteredScenarios[yr][key] = { total: filteredGroups.reduce((s, g) => s + (g.years[yr]?.[key] ?? 0), 0) };
+    }
+  }
+
+  // Use filtered data when filter active, full data otherwise
+  const base2025val  = isFiltered ? filtered2025 : watchResult?.base2025.total ?? 0;
+  const base2025up   = isFiltered ? null : watchResult?.base2025.upstream;
+  const base2025dn   = isFiltered ? null : watchResult?.base2025.downstream;
+  const scenarioVal  = (key, yr) => isFiltered
+    ? (filteredScenarios[yr]?.[key]?.total ?? 0)
+    : (watchResult?.scenarios[key]?.[yr]?.total ?? 0);
+
+  // Build watchResult shape for line chart (needs base2025.total + scenarios[key][yr].total)
+  const chartResult = watchResult ? {
+    ...watchResult,
+    base2025: { ...watchResult.base2025, total: base2025val },
+    scenarios: Object.fromEntries(Object.keys(WATCH_SCENARIOS).map(key => [key,
+      Object.fromEntries(WATCH_YEARS.map(yr => [yr, { total: scenarioVal(key, yr) }]))
+    ])),
+  } : null;
+
+  // Top 3 groups by 2025 total
+  const top3 = [...filteredGroups].sort((a, b) => b.overall2025 - a.overall2025).slice(0, 3);
 
   const thS = (align = "left") => ({
     padding: "6px 8px", color: C.white, fontWeight: 700, whiteSpace: "nowrap",
@@ -770,14 +834,30 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
     whiteSpace: "nowrap", textAlign: align, fontWeight: bold ? 700 : 400, color: color || C.text,
   });
 
+  // Multi-select toggle helper
+  const toggleFilter = (arr, setArr, val) =>
+    setArr(prev => prev.includes(val) ? prev.filter(x => x !== val) : [...prev, val]);
+
   return (
     <div style={{ padding: "14px 16px", overflowY: "auto", height: "100%" }}>
-      {/* Status + upload */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+
+      {/* ── Status + upload ── */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
         <WatchPill icon="📊" label="2025 baseline" ok={!!df2025?.length} loading={df2025Loading} error={df2025Error}
           count={df2025?.length} unit="aggregated groups" />
         <WatchPill icon="⚙️" label="Levers" ok={!!levers?.length} loading={leversLoading} error={leversError} count={levers?.length} unit="rows" />
-        {watchComputing && <span style={{ fontSize: 11, color: C.grey, fontStyle: "italic" }}>Computing scenarios…</span>}
+        {addedLeversRows?.length > 0 && (
+          <>
+            <span style={{ fontSize: 11, color: C.mid, fontWeight: 700 }}>+{addedLeversRows.length} generated rows active</span>
+            <button onClick={onDownloadAddedLevers} style={{ background: "#e8f0e8", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, fontSize: 10, cursor: "pointer", color: C.text }}>
+              ⬇ Download added levers
+            </button>
+            <button onClick={onRemoveAddedLevers} style={{ background: "#fce4e4", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, fontSize: 10, cursor: "pointer", color: C.rHigh }}>
+              ✕ Remove added levers
+            </button>
+          </>
+        )}
+        {watchComputing && <span style={{ fontSize: 11, color: C.grey, fontStyle: "italic" }}>Computing…</span>}
         <label style={{ marginLeft: "auto", background: C.mid, color: C.white, border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
           ⬆ {levers?.length ? "Replace" : "Upload"} levers.xlsx
           <input type="file" accept=".xlsx,.xls" onChange={onUploadLevers} style={{ display: "none" }} />
@@ -785,43 +865,21 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
       </div>
 
       {/* ── Growth rate control ── */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
-        background: C.white, border: "1px solid #cdd8d0", borderRadius: 8,
-        padding: "10px 14px", marginBottom: 12,
-      }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.dark, whiteSpace: "nowrap" }}>
-          Volume Growth Rate
-        </div>
-        <input
-          type="range" min={0} max={20} step={0.5} value={growthRate}
+      <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: "8px 14px", marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.dark, whiteSpace: "nowrap" }}>Volume Growth Rate</div>
+        <input type="range" min={0} max={20} step={0.5} value={growthRate}
           onChange={(e) => setGrowthRate(parseFloat(e.target.value))}
-          style={{ flex: "1 1 180px", accentColor: C.mid, cursor: "pointer" }}
-        />
+          style={{ flex: "1 1 180px", accentColor: C.mid, cursor: "pointer" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <input
-            type="number" min={0} max={20} step={0.5} value={growthRate}
+          <input type="number" min={0} max={20} step={0.5} value={growthRate}
             onChange={(e) => setGrowthRate(Math.min(20, Math.max(0, parseFloat(e.target.value) || 0)))}
-            style={{
-              width: 54, padding: "3px 6px", fontSize: 13, fontWeight: 700,
-              border: "1px solid #cdd8d0", borderRadius: 5, textAlign: "right", color: C.mid,
-            }}
-          />
+            style={{ width: 54, padding: "3px 6px", fontSize: 13, fontWeight: 700, border: "1px solid #cdd8d0", borderRadius: 5, textAlign: "right", color: C.mid }} />
           <span style={{ fontSize: 13, fontWeight: 700, color: C.mid }}>%</span>
         </div>
-        <div style={{ fontSize: 11, color: C.grey, whiteSpace: "nowrap" }}>
-          multiplier&nbsp;<strong style={{ color: C.dark }}>×{mult.toFixed(4)}</strong>
-        </div>
-        <div style={{ fontSize: 10, color: C.grey, marginLeft: "auto" }}>
-          All emissions figures include this growth factor
-        </div>
+        <div style={{ fontSize: 11, color: C.grey, whiteSpace: "nowrap" }}>×{mult.toFixed(4)} on 2026–2030 · 2025 baseline unaffected</div>
       </div>
 
-      {leversError && (
-        <div style={{ background: "#ffebee", border: "1px solid #ef9a9a", borderRadius: 7, padding: "8px 12px", fontSize: 12, color: C.rHigh, marginBottom: 12 }}>
-          {leversError}
-        </div>
-      )}
+      {leversError && <div style={{ background: "#ffebee", border: "1px solid #ef9a9a", borderRadius: 7, padding: "8px 12px", fontSize: 12, color: C.rHigh, marginBottom: 10 }}>{leversError}</div>}
 
       {!watchResult && !watchComputing && (
         <div style={{ color: C.grey, fontSize: 13, padding: "40px 0", textAlign: "center" }}>
@@ -829,76 +887,133 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
         </div>
       )}
 
-      {watchResult && (
+      {watchResult && chartResult && (
         <>
-          {/* ── Charts (top) ─────────────────────────────────────────────── */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 12, marginBottom: 16 }}>
+          {/* ── Charts row ───────────────────────────────────────────────── */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 12, marginBottom: 12, alignItems: "start" }}>
+
             {/* Line chart */}
             <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>
                 Emissions Trajectory 2025–2030 (kt CO₂e)
+                {isFiltered && <span style={{ fontWeight: 400, color: C.mid, marginLeft: 8, fontSize: 10 }}>filtered view</span>}
               </div>
-              <TrajectoryLineChart watchResult={watchResult} mult={mult} />
+              <TrajectoryLineChart watchResult={chartResult} mult={mult} />
             </div>
 
-            {/* Bar chart */}
-            <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: 14 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 10 }}>
-                2030 Scenario Comparison
-              </div>
-              {(() => {
-                const maxVal = watchResult.base2025.total * mult * 1.05;
-                const targetW = Math.min(100, (TARGET_KT / maxVal) * 100);
-                return Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
-                  const rawTotal = watchResult.scenarios[key]?.[2030]?.total ?? 0;
-                  const barW  = Math.min(100, Math.max(0, (rawTotal * mult / maxVal) * 100));
-                  return (
-                    <div key={key} style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <div style={{ width: 90, fontSize: 11, fontWeight: 700, color, flexShrink: 0 }}>{label}</div>
-                        <div style={{ flex: 1, background: "#e8f0e8", borderRadius: 4, height: 18, position: "relative" }}>
-                          <div style={{ width: `${barW}%`, height: "100%", background: color, borderRadius: 4, opacity: 0.85 }} />
-                          <div style={{ position: "absolute", left: `${targetW}%`, top: 0, bottom: 0, width: 2, background: "#e53935" }} title="5 222 kt target" />
-                        </div>
-                        <div style={{ width: 70, textAlign: "right", fontSize: 11, fontWeight: 600 }}>
-                          {fmtKt(rawTotal)} kt
+            {/* Right column: bar chart + filters */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+
+              {/* Bar chart */}
+              <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>2030 Scenario Comparison</div>
+                {(() => {
+                  const maxVal = base2025val * mult * 1.05;
+                  const targetW = Math.min(100, (TARGET_KT / maxVal) * 100);
+                  return Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
+                    const rawTotal = scenarioVal(key, 2030);
+                    const barW = Math.min(100, Math.max(0, rawTotal * mult / maxVal * 100));
+                    return (
+                      <div key={key} style={{ marginBottom: 8 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <div style={{ width: 76, fontSize: 10, fontWeight: 700, color, flexShrink: 0 }}>{label}</div>
+                          <div style={{ flex: 1, background: "#e8f0e8", borderRadius: 3, height: 14, position: "relative" }}>
+                            <div style={{ width: `${barW}%`, height: "100%", background: color, borderRadius: 3, opacity: 0.85 }} />
+                            <div style={{ position: "absolute", left: `${targetW}%`, top: 0, bottom: 0, width: 2, background: "#e53935" }} title="5 222 kt target" />
+                          </div>
+                          <div style={{ width: 58, textAlign: "right", fontSize: 10, fontWeight: 600 }}>{fmtKt(rawTotal)} kt</div>
                         </div>
                       </div>
-                    </div>
-                  );
-                });
-              })()}
-              <div style={{ fontSize: 10, color: "#e53935", marginTop: 6 }}>
-                Red line = 5 222 kt CO₂e target
+                    );
+                  });
+                })()}
+                <div style={{ fontSize: 9, color: "#e53935", marginTop: 4 }}>Red line = 5 222 kt CO₂e target</div>
+              </div>
+
+              {/* Filters */}
+              <div style={{ background: C.white, border: "1px solid #cdd8d0", borderRadius: 8, padding: "10px 14px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: C.dark }}>Filters</div>
+                  {isFiltered && (
+                    <button onClick={() => { setFilterLines([]); setFilterCountries([]); }}
+                      style={{ background: "none", border: "none", color: C.rHigh, fontSize: 10, cursor: "pointer", fontWeight: 700, padding: 0 }}>
+                      Clear all
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: C.grey, marginBottom: 4 }}>Product Line</div>
+                <div style={{ maxHeight: 90, overflowY: "auto", display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                  {allFilterLines.map(lc => (
+                    <button key={lc} onClick={() => toggleFilter(filterLines, setFilterLines, lc)}
+                      style={{ padding: "2px 7px", fontSize: 9, fontWeight: 700, borderRadius: 10, border: "1px solid",
+                        borderColor: filterLines.includes(lc) ? C.mid : "#cdd8d0",
+                        background: filterLines.includes(lc) ? C.light : C.white,
+                        color: filterLines.includes(lc) ? C.mid : C.grey, cursor: "pointer" }}>
+                      {lc}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: C.grey, marginBottom: 4 }}>Country</div>
+                <div style={{ maxHeight: 90, overflowY: "auto", display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {allFilterCountries.map(cc => (
+                    <button key={cc} onClick={() => toggleFilter(filterCountries, setFilterCountries, cc)}
+                      style={{ padding: "2px 7px", fontSize: 9, fontWeight: 700, borderRadius: 10, border: "1px solid",
+                        borderColor: filterCountries.includes(cc) ? C.teal : "#cdd8d0",
+                        background: filterCountries.includes(cc) ? "#e0f2f1" : C.white,
+                        color: filterCountries.includes(cc) ? C.teal : C.grey, cursor: "pointer" }}>
+                      {cc}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
 
-          {/* ── Summary cards ────────────────────────────────────────────── */}
-          <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+          {/* ── Summary cards + Top 3 ─────────────────────────────────────── */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "stretch" }}>
+            {/* 2025 baseline card — no growth factor */}
             <WatchCard
-              label="2025 baseline (kt CO₂e)"
-              value={fmtKt(watchResult.base2025.total)}
-              sub={`${fmtKt(watchResult.base2025.upstream)} up · ${fmtKt(watchResult.base2025.downstream)} dn`}
+              label="2025 BASELINE (KT CO₂E)"
+              value={fmtKt(base2025val, true)}
+              sub={base2025up != null ? `${fmtKt(base2025up, true)} up · ${fmtKt(base2025dn, true)} dn` : `filtered to ${filteredGroups.length} groups`}
               color={C.dark}
             />
             {Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => {
-              const y2030 = watchResult.scenarios[key]?.[2030];
-              if (!y2030) return null;
+              const raw2030 = scenarioVal(key, 2030);
               return (
                 <WatchCard
                   key={key}
-                  label={`2030 ${label} (kt CO₂e)`}
-                  value={fmtKt(y2030.total)}
-                  sub={`${fmtPct(y2030.total, watchResult.base2025.total)} vs 2025`}
+                  label={`2030 ${label.toUpperCase()} (KT CO₂E)`}
+                  value={fmtKt(raw2030)}
+                  sub={`${fmtPct(raw2030, base2025val)} vs 2025`}
                   color={color}
                 />
               );
             })}
+            {/* Separator + top 3 */}
+            {top3.length > 0 && (
+              <>
+                <div style={{ width: 1, background: "#cdd8d0", margin: "4px 4px", flexShrink: 0, alignSelf: "stretch" }} />
+                <div style={{ fontSize: 10, fontWeight: 700, color: C.grey, writingMode: "vertical-lr", transform: "rotate(180deg)", letterSpacing: 1, paddingRight: 2, alignSelf: "center" }}>
+                  TOP 3
+                </div>
+                {top3.map((g, i) => (
+                  <div key={i} style={{ background: C.off, border: "1px solid #cdd8d0", borderLeft: `3px solid ${C.bright}`, borderRadius: 8, padding: "8px 12px", minWidth: 130 }}>
+                    <div style={{ fontSize: 9, color: C.grey, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>
+                      #{i + 1} · {g.lineCode || "—"}
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: C.dark }}>
+                      {fmtKt(g.overall2025, true)} kt
+                    </div>
+                    <div style={{ fontSize: 9, color: C.grey, marginTop: 2 }}>{g.countriesDest || "all countries"}</div>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
 
           {/* ── Scenario table ───────────────────────────────────────────── */}
-          <div style={{ overflowX: "auto", borderRadius: 7, border: "1px solid #8fbe8f", boxShadow: "0 1px 4px #0001", marginBottom: 16 }}>
+          <div style={{ overflowX: "auto", borderRadius: 7, border: "1px solid #8fbe8f", boxShadow: "0 1px 4px #0001", marginBottom: 14 }}>
             <table style={{ borderCollapse: "collapse", fontSize: 11, width: "100%" }}>
               <thead>
                 <tr style={{ background: C.dark }}>
@@ -910,7 +1025,7 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                 </tr>
                 <tr style={{ background: "#2d5a3d" }}>
                   <th style={thS("left")} />
-                  <th style={thS("right")} />
+                  <th style={{ ...thS("right"), color: "#a5d6a7", fontSize: 8 }}>historical</th>
                   {WATCH_YEARS.map((yr) => (
                     <React.Fragment key={yr}>
                       <th style={thS("right")}>kt CO₂e</th>
@@ -923,14 +1038,15 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                 {Object.entries(WATCH_SCENARIOS).map(([key, { label, color }], si) => (
                   <tr key={key} style={{ background: si % 2 === 0 ? C.white : C.off }}>
                     <td style={{ ...tdS("left", true, color) }}>{label}</td>
-                    <td style={tdS("right", true)}>{fmtKt(watchResult.base2025.total)}</td>
+                    {/* 2025: historical, no growth */}
+                    <td style={tdS("right", true)}>{fmtKt(base2025val, true)}</td>
                     {WATCH_YEARS.map((yr) => {
-                      const row = watchResult.scenarios[key]?.[yr];
-                      const pctStr = fmtPct(row?.total, watchResult.base2025.total);
-                      const isPos = row && row.total > watchResult.base2025.total;
+                      const raw = scenarioVal(key, yr);
+                      const pctStr = fmtPct(raw, base2025val);
+                      const isPos = raw * mult > base2025val;
                       return (
                         <React.Fragment key={yr}>
-                          <td style={tdS("right", false)}>{row ? fmtKt(row.total) : "—"}</td>
+                          <td style={tdS("right", false)}>{fmtKt(raw)}</td>
                           <td style={{ ...tdS("right", true, isPos ? C.rHigh : C.mid) }}>{pctStr}</td>
                         </React.Fragment>
                       );
@@ -951,24 +1067,17 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
             </table>
           </div>
 
-          {/* ── Breakdown table (df_grouped2) — first 10 rows + download ── */}
+          {/* ── Breakdown table ───────────────────────────────────────────── */}
           {watchResult.byGroup?.length > 0 && (() => {
-            const allRows = watchResult.byGroup;
+            const allRows = isFiltered ? filteredGroups : watchResult.byGroup;
             const preview = allRows.slice(0, 10);
-
             function downloadCsv() {
               const scenarioKeys = Object.keys(WATCH_SCENARIOS);
-              const header = [
-                "Product Line Code", "Countries Dest", "Overall 2025 (kgco2e)",
-                ...WATCH_YEARS.flatMap((yr) =>
-                  scenarioKeys.map((s) => `Overall ${yr} ${s} (kgco2e)`)
-                ),
-              ];
+              const header = ["Product Line Code", "Countries Dest", "Overall 2025 (kgco2e)",
+                ...WATCH_YEARS.flatMap((yr) => scenarioKeys.map((s) => `Overall ${yr} ${s} (kgco2e)`))];
               const csvRows = allRows.map(({ lineCode, countriesDest, overall2025, years }) => [
                 lineCode, countriesDest, overall2025.toFixed(2),
-                ...WATCH_YEARS.flatMap((yr) =>
-                  scenarioKeys.map((s) => (years[yr]?.[s] ?? 0).toFixed(2))
-                ),
+                ...WATCH_YEARS.flatMap((yr) => scenarioKeys.map((s) => (years[yr]?.[s] ?? 0).toFixed(2))),
               ]);
               const csv = [header, ...csvRows].map((r) => r.join(",")).join("\n");
               const a = document.createElement("a");
@@ -976,22 +1085,17 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
               a.download = "trajectory_by_line_country.csv";
               a.click();
             }
-
             return (
-              <div style={{ marginBottom: 16 }}>
-                {/* Header row with download button */}
+              <div style={{ marginBottom: 14 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
                   background: C.dark, padding: "6px 10px", borderRadius: "7px 7px 0 0" }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: C.white }}>
                     2030 Trajectory — by Product Line &amp; Country (kt CO₂e)
                     <span style={{ fontWeight: 400, opacity: 0.7, marginLeft: 8 }}>
-                      showing 10 of {allRows.length} rows
+                      showing {Math.min(10, allRows.length)} of {allRows.length} rows{isFiltered ? " (filtered)" : ""}
                     </span>
                   </span>
-                  <button onClick={downloadCsv} style={{
-                    background: C.bright, color: C.dark, border: "none", borderRadius: 5,
-                    padding: "4px 10px", fontWeight: 700, fontSize: 11, cursor: "pointer",
-                  }}>
+                  <button onClick={downloadCsv} style={{ background: C.bright, color: C.dark, border: "none", borderRadius: 5, padding: "4px 10px", fontWeight: 700, fontSize: 11, cursor: "pointer" }}>
                     ⬇ Download full table (.csv)
                   </button>
                 </div>
@@ -1001,7 +1105,7 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                       <tr style={{ background: "#2d5a3d" }}>
                         <th style={{ ...thS("left"), position: "sticky", left: 0, background: "#2d5a3d", zIndex: 1 }}>Line</th>
                         <th style={thS("left")}>Country</th>
-                        <th style={thS("right")}>2025</th>
+                        <th style={{ ...thS("right"), color: "#a5d6a7", fontSize: 8 }}>2025 hist.</th>
                         {WATCH_YEARS.map((yr) => (
                           <th key={yr} colSpan={Object.keys(WATCH_SCENARIOS).length}
                             style={{ ...thS("center"), borderLeft: "2px solid #4a8a5a" }}>{yr}</th>
@@ -1013,9 +1117,7 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                         <th style={thS("right")} />
                         {WATCH_YEARS.map((yr) =>
                           Object.entries(WATCH_SCENARIOS).map(([key, { label, color }]) => (
-                            <th key={`${yr}-${key}`} style={{ ...thS("right"), color, borderLeft: key === "baseline" ? "2px solid #4a8a5a" : undefined }}>
-                              {label}
-                            </th>
+                            <th key={`${yr}-${key}`} style={{ ...thS("right"), color, borderLeft: key === "baseline" ? "2px solid #4a8a5a" : undefined }}>{label}</th>
                           ))
                         )}
                       </tr>
@@ -1025,7 +1127,8 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
                         <tr key={ri} style={{ background: ri % 2 === 0 ? C.white : C.off }}>
                           <td style={{ ...tdS("left", true), position: "sticky", left: 0, background: ri % 2 === 0 ? C.white : C.off, zIndex: 1 }}>{lineCode || "—"}</td>
                           <td style={tdS("left")}>{countriesDest || "—"}</td>
-                          <td style={tdS("right", true)}>{fmtKt(overall2025)}</td>
+                          {/* 2025 column: raw/historical */}
+                          <td style={tdS("right", true)}>{fmtKt(overall2025, true)}</td>
                           {WATCH_YEARS.map((yr) =>
                             Object.keys(WATCH_SCENARIOS).map((sKey, si) => (
                               <td key={`${yr}-${sKey}`} style={{ ...tdS("right", false), borderLeft: si === 0 ? "2px solid #e0ece0" : undefined }}>
@@ -1042,17 +1145,17 @@ function TrajectoryWatch({ df2025, df2025Loading, df2025Error, levers, leversLoa
             );
           })()}
 
-          {/* ── Debug panel ──────────────────────────────────────────────── */}
+          {/* ── Debug panel ── */}
           <details style={{ background: "#fffde7", border: "1px solid #f9a825", borderRadius: 7, padding: "8px 12px", fontSize: 11 }}>
             <summary style={{ fontWeight: 700, color: "#e65100", cursor: "pointer", marginBottom: 6 }}>
               🐛 Debug — raw df_2025 first row &amp; byGroup
             </summary>
             <div style={{ marginTop: 8 }}>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>df_2025 first row (all keys + values):</div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>df_2025 first row:</div>
               <pre style={{ background: "#fff8e1", padding: 8, borderRadius: 4, overflowX: "auto", maxHeight: 200, fontSize: 10 }}>
                 {JSON.stringify(watchResult.debugFirstRow || {}, null, 2)}
               </pre>
-              <div style={{ fontWeight: 700, margin: "8px 0 4px" }}>byGroup (df_grouped2) — first 3 rows:</div>
+              <div style={{ fontWeight: 700, margin: "8px 0 4px" }}>byGroup — first 3 rows:</div>
               <pre style={{ background: "#fff8e1", padding: 8, borderRadius: 4, overflowX: "auto", maxHeight: 300, fontSize: 10 }}>
                 {JSON.stringify(watchResult.byGroup?.slice(0, 3) || [], null, 2)}
               </pre>
@@ -1304,7 +1407,8 @@ export default function App() {
   const [trajLoading, setTrajLoading] = useState(true);
   const [trajError, setTrajError] = useState(null);
 
-  const [leversData, setLeversData]     = useState(null);
+  const [leversData, setLeversData]     = useState(null); // original loaded rows
+  const [addedLeversRows, setAddedLeversRows] = useState([]); // rows added via Add Levers
   const [leversLoading, setLeversLoading] = useState(true);
   const [leversError, setLeversError]   = useState(null);
 
@@ -1359,20 +1463,26 @@ export default function App() {
       .finally(() => setLeversLoading(false));
   }, []);
 
+  // ── Combined levers = original + user-added ───────────────────────────────
+  const combinedLevers = React.useMemo(
+    () => [...(leversData || []), ...addedLeversRows],
+    [leversData, addedLeversRows]
+  );
+
   // ── Compute scenarios when df_2025 + levers are both ready ───────────────
   useEffect(() => {
-    if (!trajData?.length || !leversData?.length) { setWatchResult(null); return; }
+    if (!trajData?.length || !combinedLevers?.length) { setWatchResult(null); return; }
     setWatchComputing(true);
     const id = setTimeout(() => {
       try {
-        setWatchResult(applyLeversV3(trajData, leversData));
+        setWatchResult(applyLeversV3(trajData, combinedLevers));
       } catch (e) {
         console.error("applyLeversV3 error:", e);
       }
       setWatchComputing(false);
     }, 0);
     return () => clearTimeout(id);
-  }, [trajData, leversData]);
+  }, [trajData, combinedLevers]);
 
   // ── AI send ──────────────────────────────────────────────────────────────
   async function send(text) {
@@ -1479,12 +1589,18 @@ export default function App() {
     }
   }
 
-  // ── Add generated levers to Watch tab in memory ──────────────────────────
-  const [leversAddedCount, setLeversAddedCount] = React.useState(0);
+  // ── Manage generated levers in Watch tab ─────────────────────────────────
   function addLeversToWatch() {
     if (!allLtRows.length) return;
-    setLeversData((prev) => [...(prev || []), ...allLtRows]);
-    setLeversAddedCount((n) => n + allLtRows.length);
+    setAddedLeversRows((prev) => [...prev, ...allLtRows]);
+  }
+  function removeAddedLevers() {
+    setAddedLeversRows([]);
+  }
+  function downloadAddedLevers() {
+    if (!addedLeversRows.length) return;
+    const ltCSV = [LEVERS_TAB_COLS.map(esc).join(","), ...addedLeversRows.map((r) => LEVERS_TAB_COLS.map((c) => esc(r[c])).join(","))].join("\n");
+    dlCSV("added_levers.csv", ltCSV);
   }
 
   const EXAMPLES = [
@@ -1572,9 +1688,12 @@ export default function App() {
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <TrajectoryWatch
             df2025={trajData} df2025Loading={trajLoading} df2025Error={trajError}
-            levers={leversData} leversLoading={leversLoading} leversError={leversError}
+            levers={combinedLevers} leversLoading={leversLoading} leversError={leversError}
             onUploadLevers={onUploadLevers}
             watchResult={watchResult} watchComputing={watchComputing}
+            addedLeversRows={addedLeversRows}
+            onRemoveAddedLevers={removeAddedLevers}
+            onDownloadAddedLevers={downloadAddedLevers}
           />
         </div>
       ) : (
@@ -1752,7 +1871,7 @@ export default function App() {
                       style={{ background: C.mid, border: "none", borderRadius: 6, padding: "6px 12px", fontWeight: 700, fontSize: 11, cursor: "pointer", color: C.white, display: "inline-flex", alignItems: "center", gap: 5 }}
                     >
                       ➕ Add Levers
-                      {leversAddedCount > 0 && <span style={{ fontSize: 9, opacity: 0.8 }}>({leversAddedCount} added)</span>}
+                      {addedLeversRows.length > 0 && <span style={{ fontSize: 9, opacity: 0.8 }}>({addedLeversRows.length} active)</span>}
                     </button>
                   )}
                   <div style={{ fontSize: 11, color: C.grey }}>{library.length} product famil{library.length === 1 ? "y" : "ies"}</div>
